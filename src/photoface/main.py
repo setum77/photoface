@@ -2,6 +2,7 @@ import sys
 import os
 import logging
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import Qt
 from src.photoface.core.database import DatabaseManager
 from src.photoface.ui.main_window import MainWindow
 
@@ -20,14 +21,17 @@ def main():
     # Настройка логирования
     setup_logging()
     
-    # Добавляем путь к пакету
-    package_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # Инициализация базы данных
-    db = DatabaseManager()
+    # # Добавляем путь к пакету
+    # package_dir = os.path.dirname(os.path.abspath(__file__))
     
     # Создание приложения
     app = QApplication(sys.argv)
+
+    # Установка стиля приложения
+    app.setStyle('Fusion')
+    
+    # Инициализация базы данных
+    db = DatabaseManager()
     
     # Создание и отображение главного окна
     window = MainWindow(db)

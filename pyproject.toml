@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-photofacemanager = "photoface.main:main"
+photoface = "photoface.main:main"
 
 [build-system]
 requires = ["setuptools", "wheel"]
