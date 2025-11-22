@@ -15,6 +15,10 @@ class FaceAnalyzer:
         
     def initialize(self):
         """Инициализация модели распознавания лиц"""
+        if self.initialized:
+            logger.debug("Модель уже инициализирована")
+            return True
+        
         try:
             logger.info("Инициализация модели распознавания лиц...")
             
@@ -39,50 +43,79 @@ class FaceAnalyzer:
     def detect_faces(self, image_path):
         """
         Обнаруживает лица на изображении и возвращает информацию о них
-        
-        Returns:
-            list: Список словарей с информацией о лицах
         """
         if not self.initialized:
             if not self.initialize():
                 return []
 
         try:
+            logger.debug(f"Начинаем детекцию лиц в: {image_path}")
+            
+            if not os.path.exists(image_path):
+                logger.error(f"Файл не существует: {image_path}")
+                return []
+                
             # Загружаем изображение с помощью OpenCV
             img = cv2.imread(image_path)
+            
             if img is None:
-                logger.error(f"Не удалось загрузить изображение: {image_path}")
+                logger.error(f"OpenCV не смог загрузить изображение: {image_path}")
+                try:
+                    from PIL import Image as PILImage
+                    pil_img = PILImage.open(image_path)
+                    img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+                    logger.info(f"Успешно загружено через PIL: {image_path}")
+                except Exception as pil_error:
+                    logger.error(f"PIL тоже не смог загрузить: {image_path}, ошибка: {pil_error}")
+                    return []
+            
+            if img is None:
+                logger.error(f"Не удалось загрузить изображение никаким методом: {image_path}")
                 return []
 
+            height, width = img.shape[:2]
+            logger.debug(f"Изображение загружено, размер: {width}x{height}")
+            
             # Конвертируем BGR в RGB
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             
             # Детекция лиц
+            logger.debug("Выполняем детекцию лиц...")
             faces = self.model.get(img_rgb)
+            logger.debug(f"Модель вернула {len(faces)} лиц")
             
             results = []
-            for face in faces:
-                # Получаем bounding box
-                bbox = face.bbox.astype(int)
-                x1, y1, x2, y2 = bbox
+            for i, face in enumerate(faces):
+                # Получаем bounding box - ВАЖНО: убедимся в правильности координат
+                bbox = face.bbox.astype(float)  # Используем float для точности
                 
-                # Ограничиваем координаты рамкой изображения
-                height, width = img_rgb.shape[:2]
-                x1 = max(0, x1)
-                y1 = max(0, y1)
-                x2 = min(width, x2)
-                y2 = min(height, y2)
+                # InsightFace может возвращать координаты в разных форматах
+                # Проверим и нормализуем координаты
+                if len(bbox) == 4:
+                    x1, y1, x2, y2 = bbox
+                else:
+                    logger.warning(f"Некорректный формат bbox: {bbox}")
+                    continue
                 
-                # Получаем embedding (векторное представление лица)
-                embedding = face.embedding
+                # Убедимся, что координаты в пределах изображения
+                x1 = max(0, float(x1))
+                y1 = max(0, float(y1))
+                x2 = min(width, float(x2))
+                y2 = min(height, float(y2))
                 
-                # Получаем confidence score
-                confidence = face.det_score
+                # Проверяем валидность bbox
+                if x1 >= x2 or y1 >= y2:
+                    logger.warning(f"Некорректный bbox: ({x1}, {y1}, {x2}, {y2})")
+                    continue
+                
+                # Логируем для отладки
+                logger.debug(f"Лицо {i+1}: bbox=({x1:.1f}, {y1:.1f}, {x2:.1f}, {y2:.1f}), "
+                            f"размер=({x2-x1:.1f}x{y2-y1:.1f}), confidence={face.det_score:.3f}")
                 
                 results.append({
                     'bbox': (x1, y1, x2, y2),
-                    'embedding': embedding.tobytes(),  # Сохраняем как bytes для БД
-                    'confidence': float(confidence),
+                    'embedding': face.embedding.tobytes(),
+                    'confidence': float(face.det_score),
                     'landmarks': face.kps if hasattr(face, 'kps') else None
                 })
                 
@@ -91,6 +124,8 @@ class FaceAnalyzer:
             
         except Exception as e:
             logger.error(f"Ошибка при обработке изображения {image_path}: {e}")
+            import traceback
+            logger.error(f"Трассировка: {traceback.format_exc()}")
             return []
 
     def calculate_similarity(self, embedding1, embedding2):
@@ -174,3 +209,76 @@ class FaceAnalyzer:
         except Exception as e:
             logger.error(f"Ошибка при рисовании рамок: {e}")
             return None
+    
+    def check_image_support(self, image_path):
+        """Проверяет, поддерживается ли формат изображения"""
+        try:
+            from PIL import Image as PILImage
+            with PILImage.open(image_path) as img:
+                format = img.format
+                mode = img.mode
+                size = img.size
+                logger.info(f"Формат: {format}, режим: {mode}, размер: {size}")
+                return True
+        except Exception as e:
+            logger.error(f"Изображение не поддерживается: {image_path}, ошибка: {e}")
+            return False
+        
+    # Диагностический метод!!!
+    def test_face_detection_with_debug(self, image_path):
+        """Тестовая детекция с подробной отладочной информацией"""
+        if not self.initialized:
+            if not self.initialize():
+                return []
+        
+        try:
+            print(f"=== ТЕСТ ДЕТЕКЦИИ ДЛЯ {image_path} ===")
+            
+            # Загружаем изображение
+            img = cv2.imread(image_path)
+            if img is None:
+                print("Ошибка: не удалось загрузить изображение")
+                return []
+            
+            height, width = img.shape[:2]
+            print(f"Размер изображения: {width}x{height}")
+            
+            # Конвертируем в RGB
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            
+            # Детекция лиц
+            faces = self.model.get(img_rgb)
+            print(f"Найдено лиц моделью: {len(faces)}")
+            
+            results = []
+            for i, face in enumerate(faces):
+                bbox = face.bbox.astype(int)
+                x1, y1, x2, y2 = bbox
+                
+                print(f"Лицо {i+1}:")
+                print(f"  Исходный bbox: {bbox}")
+                print(f"  Координаты: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
+                print(f"  Размер области: {x2-x1}x{y2-y1}")
+                print(f"  Confidence: {face.det_score:.3f}")
+                
+                # Проверяем границы
+                x1 = max(0, x1)
+                y1 = max(0, y1)
+                x2 = min(width, x2)
+                y2 = min(height, y2)
+                
+                print(f"  После коррекции границ: ({x1}, {y1}, {x2}, {y2})")
+                
+                results.append({
+                    'bbox': (x1, y1, x2, y2),
+                    'embedding': face.embedding.tobytes(),
+                    'confidence': float(face.det_score)
+                })
+            
+            return results
+            
+        except Exception as e:
+            print(f"Ошибка в тестовой детекции: {e}")
+            import traceback
+            print(f"Трассировка: {traceback.format_exc()}")
+            return []

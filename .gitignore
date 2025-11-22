@@ -29,6 +29,9 @@ wheels/
 .vscode/
 .idea/
 
+# Tests
+tests/
+
 # OS
 .DS_Store
 Thumbs.db

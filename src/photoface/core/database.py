@@ -1,8 +1,11 @@
+import logging
 import sqlite3
 import os
 import numpy as np
 from datetime import datetime
 from typing import List, Tuple, Optional    
+
+logger = logging.getLogger(__name__)
 
 class DatabaseManager:
     def __init__(self, db_path='photo_face_manager.db'):
@@ -80,6 +83,19 @@ class DatabaseManager:
             conn.commit()
 
     # методы для работы с папками
+    # def add_folder(self, folder_path):
+    #     """Добавляет папку в базу данных"""
+    #     with self.get_connection() as conn:
+    #         cursor = conn.cursor()
+    #         try:
+    #             cursor.execute(
+    #                 "INSERT OR IGNORE INTO folders (path) VALUES (?)",
+    #                 (folder_path,)
+    #             )
+    #             conn.commit()
+    #             return cursor.lastrowid
+    #         except sqlite3.IntegrityError:
+    #             return None
     def add_folder(self, folder_path):
         """Добавляет папку в базу данных"""
         with self.get_connection() as conn:
@@ -90,8 +106,17 @@ class DatabaseManager:
                     (folder_path,)
                 )
                 conn.commit()
-                return cursor.lastrowid
+                folder_id = cursor.lastrowid
+                if folder_id:
+                    logger.info(f"Добавлена папка: {folder_path} (ID: {folder_id})")
+                else:
+                    logger.warning(f"Папка уже существует: {folder_path}")
+                return folder_id
             except sqlite3.IntegrityError:
+                logger.warning(f"Попытка добавить существующую папку: {folder_path}")
+                return None
+            except Exception as e:
+                logger.error(f"Ошибка при добавлении папки {folder_path}: {e}")
                 return None
 
     def remove_folder(self, folder_path):
@@ -102,12 +127,43 @@ class DatabaseManager:
             conn.commit()
             return cursor.rowcount > 0
 
+    # def get_all_folders(self):
+    #     """Возвращает все добавленные папки"""
+    #     with self.get_connection() as conn:
+    #         cursor = conn.cursor()
+    #         cursor.execute("SELECT id, path, added_date FROM folders ORDER BY added_date")
+    #         return cursor.fetchall()
+    def get_folder_by_id(self, folder_id):
+        """Получает информацию о папке по ID"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT id, path, added_date FROM folders WHERE id = ?", 
+                    (folder_id,)
+                )
+                folder = cursor.fetchone()
+                if folder:
+                    logger.debug(f"Найдена папка: ID={folder[0]}, путь={folder[1]}")
+                else:
+                    logger.warning(f"Папка с ID {folder_id} не найдена")
+                return folder
+            except Exception as e:
+                logger.error(f"Ошибка при получении папки {folder_id} из БД: {e}")
+                return None
+
     def get_all_folders(self):
         """Возвращает все добавленные папки"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id, path, added_date FROM folders ORDER BY added_date")
-            return cursor.fetchall()
+            try:
+                cursor.execute("SELECT id, path, added_date FROM folders ORDER BY added_date")
+                folders = cursor.fetchall()
+                logger.debug(f"Получено {len(folders)} папок из БД")
+                return folders
+            except Exception as e:
+                logger.error(f"Ошибка при получении папок из БД: {e}")
+                return []
 
     def folder_exists(self, folder_path):
         """Проверяет, существует ли папка в базе"""
@@ -117,6 +173,23 @@ class DatabaseManager:
             return cursor.fetchone() is not None
         
     # Методы для работы с изображениями и лицами
+    # def add_image(self, folder_id, file_path, file_name, file_size, created_time):
+    #     """Добавляет изображение в базу данных"""
+    #     with self.get_connection() as conn:
+    #         cursor = conn.cursor()
+    #         try:
+    #             cursor.execute('''
+    #                 INSERT OR IGNORE INTO images 
+    #                 (folder_id, file_path, file_name, file_size, created_time) 
+    #                 VALUES (?, ?, ?, ?, ?)
+    #             ''', (folder_id, file_path, file_name, file_size, created_time))
+    #             conn.commit()
+    #             return cursor.lastrowid
+    #         except sqlite3.IntegrityError:
+    #             # Если изображение уже существует, возвращаем его ID
+    #             cursor.execute("SELECT id FROM images WHERE file_path = ?", (file_path,))
+    #             result = cursor.fetchone()
+    #             return result[0] if result else None
     def add_image(self, folder_id, file_path, file_name, file_size, created_time):
         """Добавляет изображение в базу данных"""
         with self.get_connection() as conn:
@@ -128,12 +201,21 @@ class DatabaseManager:
                     VALUES (?, ?, ?, ?, ?)
                 ''', (folder_id, file_path, file_name, file_size, created_time))
                 conn.commit()
-                return cursor.lastrowid
+                image_id = cursor.lastrowid
+                if image_id:
+                    logger.debug(f"Добавлено изображение: {file_path} (ID: {image_id})")
+                else:
+                    logger.debug(f"Изображение уже существует: {file_path}")
+                return image_id
             except sqlite3.IntegrityError:
                 # Если изображение уже существует, возвращаем его ID
                 cursor.execute("SELECT id FROM images WHERE file_path = ?", (file_path,))
                 result = cursor.fetchone()
+                logger.debug(f"Изображение уже в БД: {file_path} (ID: {result[0] if result else 'не найден'})")
                 return result[0] if result else None
+            except Exception as e:
+                logger.error(f"Ошибка при добавлении изображения {file_path}: {e}")
+                return None
 
     def get_pending_images(self, folder_id=None):
         """Возвращает изображения, ожидающие обработки"""
@@ -172,18 +254,48 @@ class DatabaseManager:
             conn.commit()
             return cursor.lastrowid
 
+    # def add_face(self, image_id, person_id, embedding, bbox, confidence):
+    #     """Добавляет найденное лицо в базу данных"""
+    #     with self.get_connection() as conn:
+    #         cursor = conn.cursor()
+    #         cursor.execute('''
+    #             INSERT INTO faces 
+    #             (image_id, person_id, embedding, bbox_x1, bbox_y1, bbox_x2, bbox_y2, confidence)
+    #             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    #         ''', (image_id, person_id, embedding, 
+    #               bbox[0], bbox[1], bbox[2], bbox[3], confidence))
+    #         conn.commit()
+    #         return cursor.lastrowid
     def add_face(self, image_id, person_id, embedding, bbox, confidence):
         """Добавляет найденное лицо в базу данных"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO faces 
-                (image_id, person_id, embedding, bbox_x1, bbox_y1, bbox_x2, bbox_y2, confidence)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (image_id, person_id, embedding, 
-                  bbox[0], bbox[1], bbox[2], bbox[3], confidence))
-            conn.commit()
-            return cursor.lastrowid
+            try:
+                # ЛОГИРОВАНИЕ ДЛЯ ОТЛАДКИ
+                logger.debug(f"Добавление лица: image_id={image_id}, bbox={bbox}, confidence={confidence}")
+                
+                # Проверяем и конвертируем координаты
+                if isinstance(bbox, (tuple, list)) and len(bbox) == 4:
+                    x1, y1, x2, y2 = bbox
+                    x1, y1, x2, y2 = float(x1), float(y1), float(x2), float(y2)
+                else:
+                    logger.error(f"Некорректный формат bbox: {bbox}")
+                    return None
+                
+                cursor.execute('''
+                    INSERT INTO faces 
+                    (image_id, person_id, embedding, bbox_x1, bbox_y1, bbox_x2, bbox_y2, confidence)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (image_id, person_id, embedding, 
+                    x1, y1, x2, y2, confidence))
+                conn.commit()
+                face_id = cursor.lastrowid
+                logger.debug(f"Добавлено лицо: image_id={image_id}, person_id={person_id}, confidence={confidence:.3f}, bbox=({x1},{y1},{x2},{y2})")
+                return face_id
+            except Exception as e:
+                logger.error(f"Ошибка при добавлении лица для image_id={image_id}: {e}")
+                logger.error(f"bbox={bbox}, confidence={confidence}")
+                return None
 
     def get_person_by_name(self, name):
         """Находит персону по имени"""
@@ -201,7 +313,15 @@ class DatabaseManager:
                 SELECT id FROM images 
                 WHERE file_path = ? AND scan_status = 'completed'
             ''', (file_path,))
-            return cursor.fetchone() is not None
+            result = cursor.fetchone()
+            
+            # ДОБАВЬТЕ ЛОГИРОВАНИЕ ДЛЯ ОТЛАДКИ
+            if result:
+                logger.debug(f"Изображение {file_path} уже обработано (ID: {result[0]})")
+            else:
+                logger.debug(f"Изображение {file_path} еще не обработано")
+                
+            return result is not None
 
     def get_folder_images_count(self, folder_id):
         """Возвращает количество изображений в папке"""
@@ -483,3 +603,41 @@ class DatabaseManager:
             ''', (person_id,))
             result = cursor.fetchone()
             return result is not None and os.path.exists(result[0])
+    
+    # Метод для очистки обработанных данных
+    def clear_processed_data(self):
+        """Очищает все обработанные данные (для тестирования)"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM faces")
+            cursor.execute("DELETE FROM images")
+            cursor.execute("DELETE FROM persons WHERE name != 'not recognized'")
+            conn.commit()
+            logger.info("Очищены все обработанные данные")
+
+    # Диагностический метод 
+    def debug_face_data(self, image_path):
+        """Диагностика данных о лицах для изображения"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT f.id, f.bbox_x1, f.bbox_y1, f.bbox_x2, f.bbox_y2, 
+                    f.confidence, p.name, i.file_path
+                FROM faces f
+                JOIN images i ON f.image_id = i.id
+                JOIN persons p ON f.person_id = p.id
+                WHERE i.file_path = ?
+            ''', (image_path,))
+            
+            faces = cursor.fetchall()
+            print(f"=== ДИАГНОСТИКА ДЛЯ {image_path} ===")
+            print(f"Найдено лиц: {len(faces)}")
+            
+            for face_id, x1, y1, x2, y2, confidence, person_name, file_path in faces:
+                print(f"Лицо ID {face_id}:")
+                print(f"  BBOX: ({x1}, {y1}, {x2}, {y2})")
+                print(f"  Confidence: {confidence}")
+                print(f"  Person: {person_name}")
+                print(f"  Размер bbox: {x2-x1:.1f}x{y2-y1:.1f}")
+            
+            return faces

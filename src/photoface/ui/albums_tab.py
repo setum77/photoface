@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
 from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QPixmap, QIcon, QFont
 from src.photoface.core.database import DatabaseManager
+from src.photoface.core.config import Config
 from src.photoface.core.export_manager import ExportManager
 from src.photoface.utils.helpers import generate_thumbnail, pil_to_pixmap
 
@@ -147,20 +148,113 @@ class AlbumsTab(QWidget):
     image_double_clicked = pyqtSignal(str)
     needs_refresh = pyqtSignal()
     
-    def __init__(self, db_manager: DatabaseManager):
+    def __init__(self, db_manager: DatabaseManager, config: Config):
         super().__init__()
         self.db_manager = db_manager
+        self.config = config
         self.export_manager = ExportManager(db_manager)
         self.current_person_id = None
         self.output_path = ""
         self.init_ui()
         self.connect_signals()
         
+    # def init_ui(self):
+    #     layout = QVBoxLayout(self)
+        
+    #     # Панель инструментов
+    #     toolbar_layout = QHBoxLayout()
+        
+    #     self.output_path_btn = QPushButton("Конечная папка")
+    #     self.output_path_btn.clicked.connect(self.set_output_path)
+        
+    #     self.sync_btn = QPushButton("Синхронизация")
+    #     self.sync_btn.clicked.connect(self.start_sync)
+    #     self.sync_btn.setEnabled(False)
+        
+    #     self.cancel_sync_btn = QPushButton("Отменить")
+    #     self.cancel_sync_btn.clicked.connect(self.cancel_sync)
+    #     self.cancel_sync_btn.setEnabled(False)
+        
+    #     self.refresh_btn = QPushButton("Обновить")
+    #     self.refresh_btn.clicked.connect(self.refresh_data)
+        
+    #     self.stats_label = QLabel("Выберите конечную папку для начала работы")
+        
+    #     toolbar_layout.addWidget(self.output_path_btn)
+    #     toolbar_layout.addWidget(self.sync_btn)
+    #     toolbar_layout.addWidget(self.cancel_sync_btn)
+    #     toolbar_layout.addWidget(self.refresh_btn)
+    #     toolbar_layout.addWidget(self.stats_label)
+    #     toolbar_layout.addStretch()
+        
+    #     layout.addLayout(toolbar_layout)
+        
+    #     # Основной разделитель
+    #     splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+    #     # Левая панель - список персон с альбомами
+    #     self.left_panel = QWidget()
+    #     left_layout = QVBoxLayout(self.left_panel)
+        
+    #     left_layout.addWidget(QLabel("Подтвержденные персоны:"))
+        
+    #     self.persons_list = QListView()
+    #     self.persons_model = QStandardItemModel()
+    #     self.persons_list.setModel(self.persons_model)
+    #     self.persons_list.clicked.connect(self.on_person_selected)
+    #     self.persons_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+    #     self.persons_list.customContextMenuRequested.connect(self.show_person_context_menu)
+        
+    #     left_layout.addWidget(self.persons_list)
+        
+    #     # Информация о выбранной персоне
+    #     self.person_info_label = QLabel("Выберите персону для просмотра фотографий")
+    #     self.person_info_label.setWordWrap(True)
+    #     self.person_info_label.setStyleSheet("padding: 5px; background-color: #f5f5f5; border: 1px solid #ddd;")
+    #     left_layout.addWidget(self.person_info_label)
+        
+    #     splitter.addWidget(self.left_panel)
+        
+    #     # Правая панель - фотографии альбома
+    #     self.right_panel = QWidget()
+    #     right_layout = QVBoxLayout(self.right_panel)
+        
+    #     right_layout.addWidget(QLabel("Фотографии альбома:"))
+        
+    #     # Scroll area для миниатюр
+    #     self.scroll_area = QScrollArea()
+    #     self.photos_widget = QWidget()
+    #     self.photos_layout = QGridLayout(self.photos_widget)
+    #     self.photos_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
+    #     self.scroll_area.setWidget(self.photos_widget)
+    #     self.scroll_area.setWidgetResizable(True)
+        
+    #     right_layout.addWidget(self.scroll_area)
+        
+    #     splitter.addWidget(self.right_panel)
+        
+    #     # Установка пропорций
+    #     splitter.setSizes([300, 900])
+    #     layout.addWidget(splitter)
+        
+    #     # Прогресс-диалог
+    #     self.progress_dialog = QProgressDialog("Синхронизация...", "Отменить", 0, 100, self)
+    #     self.progress_dialog.setWindowTitle("Синхронизация альбомов")
+    #     self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+    #     self.progress_dialog.canceled.connect(self.cancel_sync)
+    #     self.progress_dialog.close()
+        
+    #     # Загружаем данные
+    #     self.refresh_data()
     def init_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
         
         # Панель инструментов
         toolbar_layout = QHBoxLayout()
+        toolbar_layout.setContentsMargins(0, 0, 0, 0)
         
         self.output_path_btn = QPushButton("Конечная папка")
         self.output_path_btn.clicked.connect(self.set_output_path)
@@ -189,10 +283,12 @@ class AlbumsTab(QWidget):
         
         # Основной разделитель
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
         
         # Левая панель - список персон с альбомами
         self.left_panel = QWidget()
         left_layout = QVBoxLayout(self.left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
         
         left_layout.addWidget(QLabel("Подтвержденные персоны:"))
         
@@ -207,6 +303,7 @@ class AlbumsTab(QWidget):
         
         # Информация о выбранной персоне
         self.person_info_label = QLabel("Выберите персону для просмотра фотографий")
+        self.person_info_label.setMaximumHeight(80)  # Ограничиваем высоту
         self.person_info_label.setWordWrap(True)
         self.person_info_label.setStyleSheet("padding: 5px; background-color: #f5f5f5; border: 1px solid #ddd;")
         left_layout.addWidget(self.person_info_label)
@@ -216,6 +313,7 @@ class AlbumsTab(QWidget):
         # Правая панель - фотографии альбома
         self.right_panel = QWidget()
         right_layout = QVBoxLayout(self.right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
         
         right_layout.addWidget(QLabel("Фотографии альбома:"))
         
@@ -233,18 +331,8 @@ class AlbumsTab(QWidget):
         splitter.addWidget(self.right_panel)
         
         # Установка пропорций
-        splitter.setSizes([300, 900])
-        layout.addWidget(splitter)
-        
-        # Прогресс-диалог
-        self.progress_dialog = QProgressDialog("Синхронизация...", "Отменить", 0, 100, self)
-        self.progress_dialog.setWindowTitle("Синхронизация альбомов")
-        self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
-        self.progress_dialog.canceled.connect(self.cancel_sync)
-        self.progress_dialog.close()
-        
-        # Загружаем данные
-        self.refresh_data()
+        splitter.setSizes([250, 650])
+        layout.addWidget(splitter, 1)
         
     # def connect_signals(self):
     #     """Подключает сигналы экспорта"""

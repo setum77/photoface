@@ -1,9 +1,24 @@
 [project]
 name = "photoface"
 version = "0.1.0"
-description = "Add your description here"
+description = "Face recognition in selected folders and grouping photos into personalized folders"
+authors = [
+    {name = "Setum77", email = "setum77@gmail.com"},
+]
 readme = "README.md"
 requires-python = ">=3.11"
+keywords = ["face-recognition", "photo-management", "qt"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "Topic :: Multimedia :: Graphics :: Viewers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
 dependencies = [
     "insightface",
     "numpy>=1.21.0,<2.0.0",
@@ -11,16 +26,22 @@ dependencies = [
     "pillow>=12.0.0",
     "pyqt6>=6.10.0",
     "scikit-learn>=1.7.2",
-    "onnxruntime==1.20.0",
-
+    "onnxruntime>=1.20.0",
 ]
 
 [project.scripts]
 photoface = "photoface.main:main"
 
+[project.urls]
+Homepage = "https://github.com/Setum77/photoface"
+
 [build-system]
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.uv.sources]
-insightface = { path = "D:/tsa/dwn/insightface-0.7.3-cp311-cp311-win_amd64.whl" }
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

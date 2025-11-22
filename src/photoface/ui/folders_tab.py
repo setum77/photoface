@@ -1,11 +1,12 @@
 import os
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter, 
                              QTreeView, QListView, QPushButton, QFileDialog,
-                             QMessageBox, QMenu, QProgressDialog, QLabel)
+                             QMessageBox, QMenu, QProgressDialog, QLabel, QApplication)
 from PyQt6.QtCore import QDir, QModelIndex, Qt, pyqtSignal, QSize
 from PyQt6.QtGui import QFileSystemModel, QAction, QStandardItemModel, QStandardItem, QIcon
 from src.photoface.core.database import DatabaseManager
 from src.photoface.core.scan_manager import ScanManager
+from src.photoface.core.config import Config
 from src.photoface.utils.helpers import generate_thumbnail, pil_to_pixmap, get_image_files
 
 class ThumbnailListModel(QStandardItemModel):
@@ -20,9 +21,10 @@ class FoldersTab(QWidget):
     scan_progress_updated = pyqtSignal(int, int, str)
     scan_finished = pyqtSignal()
 
-    def __init__(self, db_manager: DatabaseManager):
+    def __init__(self, db_manager: DatabaseManager, config: Config):
         super().__init__()
         self.db_manager = db_manager
+        self.config = config
         self.scan_manager = ScanManager(db_manager)
         self.current_folder = None
         self.current_folder_id = None
@@ -31,9 +33,12 @@ class FoldersTab(QWidget):
 
     def init_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)  # Уменьшаем отступы
+        layout.setSpacing(5)  # Уменьшаем расстояние между элементами
 
         # Панель инструментов
         toolbar_layout = QHBoxLayout()
+        toolbar_layout.setContentsMargins(0, 0, 0, 0)
         
         self.add_folder_btn = QPushButton("Добавить папку")
         self.add_folder_btn.clicked.connect(self.add_folder)
@@ -51,11 +56,16 @@ class FoldersTab(QWidget):
         self.editor_btn = QPushButton("Внешний редактор")
         self.editor_btn.clicked.connect(self.set_external_editor)
 
+        # Временная кнопка для очистки данных
+        self.clear_btn = QPushButton("Очистить данные")
+        self.clear_btn.clicked.connect(self.clear_data)
+
         toolbar_layout.addWidget(self.add_folder_btn)
         toolbar_layout.addWidget(self.remove_folder_btn)
         toolbar_layout.addWidget(self.scan_btn)
         toolbar_layout.addWidget(self.cancel_scan_btn)
         toolbar_layout.addWidget(self.editor_btn)
+        toolbar_layout.addWidget(self.clear_btn)
         toolbar_layout.addStretch()
         
         # Статус сканирования
@@ -66,10 +76,12 @@ class FoldersTab(QWidget):
 
         # Основной разделитель
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)  # Не позволяем панелям схлопываться
 
         # Левая панель - дерево папок
         self.left_panel = QWidget()
         left_layout = QVBoxLayout(self.left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
         
         left_layout.addWidget(QLabel("Добавленные папки:"))
         
@@ -88,6 +100,7 @@ class FoldersTab(QWidget):
 
         # Статистика папки
         self.folder_stats_label = QLabel("Выберите папку для просмотра статистики")
+        self.folder_stats_label.setMaximumHeight(60)  # Ограничиваем высоту
         left_layout.addWidget(self.folder_stats_label)
         
         splitter.addWidget(self.left_panel)
@@ -95,6 +108,7 @@ class FoldersTab(QWidget):
         # Правая панель - миниатюры
         self.right_panel = QWidget()
         right_layout = QVBoxLayout(self.right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
         
         right_layout.addWidget(QLabel("Фотографии:"))
         
@@ -112,9 +126,9 @@ class FoldersTab(QWidget):
         
         splitter.addWidget(self.right_panel)
 
-        # Установка пропорций
-        splitter.setSizes([300, 900])
-        layout.addWidget(splitter)
+        # Установка пропорций (увеличиваем правую панель)
+        splitter.setSizes([200, 600])
+        layout.addWidget(splitter, 1)  # 1 - коэффициент растяжения
 
         # Прогресс-диалог
         self.progress_dialog = QProgressDialog("Сканирование...", "Отменить", 0, 100, self)
@@ -346,5 +360,18 @@ class FoldersTab(QWidget):
         if editor_path:
             QMessageBox.information(self, "Успех", f"Редактор установлен: {editor_path}")
 
-from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import QSize
+    def clear_data(self):
+        """Очищает все обработанные данные"""
+        reply = QMessageBox.question(
+            self, "Подтверждение",
+            "Очистить все обработанные данные?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.db_manager.clear_processed_data()
+            QMessageBox.information(self, "Успех", "Данные очищены")
+            self.load_folders()
+
+# from PyQt6.QtWidgets import QApplication
+# from PyQt6.QtCore import QSize

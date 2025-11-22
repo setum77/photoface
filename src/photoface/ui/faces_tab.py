@@ -80,13 +80,17 @@ class FaceThumbnailWidget(QFrame):
             if thumbnail:
                 # Обрезаем область лица
                 x1, y1, x2, y2 = self.bbox
+
+                # Убедимся, что координаты - числа
+                x1, y1, x2, y2 = float(x1), float(y1), float(x2), float(y2)
+                
                 # Масштабируем координаты к размеру миниатюры
                 img_width, img_height = thumbnail.size
                 orig_width, orig_height = self.get_original_image_size()
                 
                 if orig_width and orig_height:
-                    scale_x = img_width / orig_width
-                    scale_y = img_height / orig_height
+                    scale_x = img_width / float(orig_width)
+                    scale_y = img_height / float(orig_height)
                     
                     x1_scaled = int(x1 * scale_x)
                     y1_scaled = int(y1 * scale_y)
@@ -101,6 +105,8 @@ class FaceThumbnailWidget(QFrame):
                     self.thumbnail_label.setPixmap(pixmap)
         except Exception as e:
             print(f"Ошибка загрузки миниатюры лица: {e}")
+            import traceback
+            print(f"Трассировка: {traceback.format_exc()}")
             
     def get_original_image_size(self):
         """Возвращает размер оригинального изображения"""
@@ -159,9 +165,12 @@ class FacesTab(QWidget):
         
     def init_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
         
         # Панель инструментов
         toolbar_layout = QHBoxLayout()
+        toolbar_layout.setContentsMargins(0, 0, 0, 0)
         
         self.cluster_btn = QPushButton("Группировать лица")
         self.cluster_btn.clicked.connect(self.cluster_faces)
@@ -180,10 +189,12 @@ class FacesTab(QWidget):
         
         # Основной разделитель
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
         
         # Левая панель - список персон
         self.left_panel = QWidget()
         left_layout = QVBoxLayout(self.left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
         
         left_layout.addWidget(QLabel("Персоны:"))
         
@@ -201,6 +212,7 @@ class FacesTab(QWidget):
         # Правая панель - лица выбранной персоны
         self.right_panel = QWidget()
         right_layout = QVBoxLayout(self.right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
         
         right_layout.addWidget(QLabel("Лица:"))
         
@@ -218,8 +230,8 @@ class FacesTab(QWidget):
         splitter.addWidget(self.right_panel)
         
         # Установка пропорций
-        splitter.setSizes([300, 900])
-        layout.addWidget(splitter)
+        splitter.setSizes([250, 650])
+        layout.addWidget(splitter, 1)
         
         # Загружаем данные
         self.refresh_data()
@@ -289,9 +301,12 @@ class FacesTab(QWidget):
         max_cols = 4
         
         for face_id, image_id, image_path, x1, y1, x2, y2, confidence in faces:
+            # Создаем кортеж bbox из отдельных координат
+            bbox = (x1, y1, x2, y2)
             face_widget = FaceThumbnailWidget(
-                face_id, image_path, (x1, y1, x2, y2), confidence
+                face_id, image_path, bbox, confidence
             )
+            
             face_widget.face_confirmed.connect(self.on_face_confirmed)
             face_widget.face_rejected.connect(self.on_face_rejected)
             face_widget.face_double_clicked.connect(self.image_double_clicked)
