@@ -42,18 +42,20 @@ class FaceClusterer:
                 logger.info("Недостаточно лиц для кластеризации")
                 return {}
             
-            # Нормализуем эмбеддинги
-            embeddings_norm = [emb / np.linalg.norm(emb) for emb in embeddings]
-            embeddings_array = np.array(embeddings_norm)
+            # Создаем массив сырых эмбеддингов
+            embeddings_array = np.array(embeddings)
+
+            # Применяем предложенные улучшения
+            embeddings_array = np.nan_to_num(embeddings_array, nan=0.0, posinf=0.0, neginf=0.0)
+            norms = np.linalg.norm(embeddings_array, axis=1, keepdims=True)
+            norms[norms == 0] = 1  # Избежать /0
+            embeddings_array /= norms
             
-            # Вычисляем матрицу схожести
             similarity_matrix = cosine_similarity(embeddings_array)
+            similarity_matrix = np.clip(similarity_matrix, -1, 1)  # Clamp
+            distance_matrix = 1 - similarity_matrix  # Теперь >=0
             
             # Используем DBSCAN для кластеризации
-            # Преобразуем схожесть в расстояние (1 - similarity)
-            distance_matrix = 1 - similarity_matrix
-            
-            # DBSCAN с параметрами для группировки похожих лиц
             clustering = DBSCAN(
                 eps=1 - self.similarity_threshold,
                 min_samples=1,
@@ -75,7 +77,6 @@ class FaceClusterer:
             
             logger.info(f"Создано {len(cluster_groups)} кластеров из {len(face_ids)} лиц")
             return cluster_groups
-            
         except Exception as e:
             logger.error(f"Ошибка при кластеризации лиц: {e}")
             return {}

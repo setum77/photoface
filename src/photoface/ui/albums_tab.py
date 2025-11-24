@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
                              QFileDialog, QScrollArea, QFrame, QSizePolicy,
                              QToolButton, QDialog, QDialogButtonBox)
 from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer
-from PyQt6.QtGui import QStandardItemModel, QStandardItem, QPixmap, QIcon, QFont
+from PyQt6.QtGui import QStandardItemModel, QStandardItem, QPixmap, QIcon, QFont, QAction
 from src.photoface.core.database import DatabaseManager
 from src.photoface.core.config import Config
 from src.photoface.core.export_manager import ExportManager
@@ -333,6 +333,13 @@ class AlbumsTab(QWidget):
         # Установка пропорций
         splitter.setSizes([250, 650])
         layout.addWidget(splitter, 1)
+
+        # Прогресс-диалог
+        self.progress_dialog = QProgressDialog("Синхронизация...", "Отменить", 0, 100, self)
+        self.progress_dialog.setWindowTitle("Синхронизация альбомов")
+        self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self.progress_dialog.canceled.connect(self.cancel_sync)
+        self.progress_dialog.close()  # Скрыть изначально
         
     # def connect_signals(self):
     #     """Подключает сигналы экспорта"""
@@ -384,7 +391,7 @@ class AlbumsTab(QWidget):
             
         persons = self.db_manager.get_persons_with_albums()
         total_persons = len(persons)
-        created_albums = sum(1 for _, _, _, _ in persons if self.db_manager.is_album_created(_[0]))
+        created_albums = sum(1 for p_id, _, _, _ in persons if self.db_manager.is_album_created(p_id))
         
         stats_text = f"Персон: {total_persons} | Создано альбомов: {created_albums}"
         self.stats_label.setText(stats_text)
@@ -601,4 +608,6 @@ class AlbumsTab(QWidget):
         else:
             QMessageBox.warning(self, "Ошибка", "Альбом не настроен или папка не существует")
 
-from PyQt6.QtWidgets import QApplication
+
+
+
