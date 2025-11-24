@@ -3,7 +3,8 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
                              QListView, QGridLayout, QPushButton, QMessageBox,
                              QMenu, QProgressDialog, QLabel, QLineEdit, 
                              QDialog, QDialogButtonBox, QScrollArea, 
-                             QCheckBox, QFrame, QSizePolicy, QToolButton)
+                             QCheckBox, QFrame, QSizePolicy, QToolButton,
+                             QListWidget, QListWidgetItem)
 from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QPixmap, QIcon, QFont, QAction
 from src.photoface.core.database import DatabaseManager
@@ -17,12 +18,13 @@ class FaceThumbnailWidget(QFrame):
     face_rejected = pyqtSignal(int)   # face_id
     face_double_clicked = pyqtSignal(str)  # image_path
     
-    def __init__(self, face_id, image_path, bbox, confidence, parent=None):
+    def __init__(self, face_id, image_path, bbox, confidence, is_person_confirmed=False, parent=None):
         super().__init__(parent)
         self.face_id = face_id
         self.image_path = image_path
         self.bbox = bbox
         self.confidence = confidence
+        self.is_person_confirmed = is_person_confirmed
         self.init_ui()
         
     def init_ui(self):
@@ -43,16 +45,18 @@ class FaceThumbnailWidget(QFrame):
         buttons_layout = QHBoxLayout()
         
         self.confirm_btn = QToolButton()
-        self.confirm_btn.setIcon(QIcon.fromTheme("dialog-ok-apply"))
-        self.confirm_btn.setToolTip("Подтвердить лицо")
-        self.confirm_btn.setFixedSize(20, 20)
+        self.confirm_btn.setFixedSize(24, 24)
+																	  
+											 
         self.confirm_btn.clicked.connect(lambda: self.face_confirmed.emit(self.face_id))
         
         self.reject_btn = QToolButton()
-        self.reject_btn.setIcon(QIcon.fromTheme("dialog-cancel"))
+        self.reject_btn.setText("❌")
         self.reject_btn.setToolTip("Отклонить лицо")
-        self.reject_btn.setFixedSize(20, 20)
+        self.reject_btn.setFixedSize(24, 24)
         self.reject_btn.clicked.connect(lambda: self.face_rejected.emit(self.face_id))
+        
+        self.update_buttons()
         
         buttons_layout.addWidget(self.confirm_btn)
         buttons_layout.addWidget(self.reject_btn)
@@ -71,6 +75,20 @@ class FaceThumbnailWidget(QFrame):
         
         self.setFrameStyle(QFrame.Shape.StyledPanel)
         self.setStyleSheet("QFrame { border: 1px solid #ddd; border-radius: 3px; }")
+
+        self.update_buttons()
+
+    def update_buttons(self):
+        if self.is_person_confirmed:
+            self.confirm_btn.setText("😊")
+            self.confirm_btn.setToolTip("Персона подтверждена")
+            self.confirm_btn.setEnabled(False)
+            self.confirm_btn.setStyleSheet("QToolButton { background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; }")
+        else:
+            self.confirm_btn.setText("✓")
+            self.confirm_btn.setToolTip("Подтвердить лицо")
+            self.confirm_btn.setEnabled(True)
+            self.confirm_btn.setStyleSheet("QToolButton { border-radius: 4px; }")
         
     def load_face_thumbnail(self):
         """Загружает и обрезает миниатюру лица"""
@@ -122,23 +140,35 @@ class FaceThumbnailWidget(QFrame):
         self.face_double_clicked.emit(self.image_path)
 
 class PersonNameDialog(QDialog):
-    """Диалог для ввода имени персоны"""
+    """Диалог для ввода имени персоны с автодополнением"""
     
-    def __init__(self, current_name="", parent=None):
+    def __init__(self, current_name="", db_manager=None, current_person_id=None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Изменить имя персоны")
+        self.db_manager = db_manager
+        self.current_person_id = current_person_id
+        self.persons = []  # Список всех персон для фильтрации
+        self.target_id = None
+        self.setWindowTitle("Переименовать персону")
         self.setModal(True)
         self.init_ui(current_name)
         
     def init_ui(self, current_name):
         layout = QVBoxLayout(self)
         
-        layout.addWidget(QLabel("Введите имя персоны:"))
+        layout.addWidget(QLabel("Введите имя персоны или выберите из списка:"))
         
         self.name_edit = QLineEdit()
         self.name_edit.setText(current_name)
         self.name_edit.selectAll()
+        self.name_edit.textChanged.connect(self.filter_suggestions)
         layout.addWidget(self.name_edit)
+        
+        # Список предложений
+        layout.addWidget(QLabel("Подходящие персоны:"))
+        self.suggestions_list = QListWidget()
+        self.suggestions_list.setMaximumHeight(150)
+        self.suggestions_list.itemDoubleClicked.connect(self.on_suggestion_double_clicked)
+        layout.addWidget(self.suggestions_list)
         
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -147,8 +177,41 @@ class PersonNameDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         
-    def get_name(self):
-        return self.name_edit.text().strip()
+        # Загружаем персон и фильтруем сразу
+        if self.db_manager:
+            self.persons = self.db_manager.get_person_stats()
+            self.filter_suggestions()
+    
+    def filter_suggestions(self):
+        """Фильтрует список по введённому тексту"""
+        if not self.persons:
+            return
+            
+        query = self.name_edit.text().lower().strip()
+        self.suggestions_list.clear()
+        
+        for person_id, name, is_confirmed, face_count in self.persons:
+            if (person_id != self.current_person_id and 
+                is_confirmed and 
+                query in name.lower() and 
+                name.lower() != 'not recognized'):
+                
+                display_text = f"{name} ({face_count} фото)"
+                item = QListWidgetItem(display_text)
+                item.setData(Qt.ItemDataRole.UserRole, person_id)
+                self.suggestions_list.addItem(item)
+    
+    def on_suggestion_double_clicked(self, item):
+        """Устанавливает выбранное имя и закрывает диалог"""
+        self.name_edit.setText(item.text().split(' (')[0])
+        self.accept()
+    
+    def get_name_and_target(self):
+        """Возвращает новое имя и target_id (если выбрано из списка)"""
+        new_name = self.name_edit.text().strip()
+        selected_item = self.suggestions_list.currentItem()
+        target_id = selected_item.data(Qt.ItemDataRole.UserRole) if selected_item else None
+        return new_name, target_id
 
 class FacesTab(QWidget):
     """Вкладка для работы с лицами и группировки"""
@@ -299,12 +362,20 @@ class FacesTab(QWidget):
         # Отображаем лица в сетке
         row, col = 0, 0
         max_cols = 4
+
+        # Определяем статус подтверждения персоны
+        person_confirmed = False
+        persons_stats = self.db_manager.get_person_stats()
+        for p_id, _, confirmed, _ in persons_stats:
+            if p_id == person_id:
+                person_confirmed = confirmed
+                break
         
         for face_id, image_id, image_path, x1, y1, x2, y2, confidence in faces:
             # Создаем кортеж bbox из отдельных координат
             bbox = (x1, y1, x2, y2)
             face_widget = FaceThumbnailWidget(
-                face_id, image_path, bbox, confidence
+                face_id, image_path, bbox, confidence, person_confirmed
             )
             
             face_widget.face_confirmed.connect(self.on_face_confirmed)
@@ -324,6 +395,8 @@ class FacesTab(QWidget):
             if self.db_manager.confirm_person(self.current_person_id):
                 QMessageBox.information(self, "Успех", "Персона подтверждена")
                 self.refresh_data()
+                if self.current_person_id:
+                    self.load_person_faces(self.current_person_id)
                 
     def on_face_rejected(self, face_id):
         """Обрабатывает отклонение лица"""
@@ -367,15 +440,53 @@ class FacesTab(QWidget):
             
             menu.exec(self.persons_list.viewport().mapToGlobal(position))
             
+    # def rename_person(self, person_id, current_name):
+    #     """Переименовывает персону"""
+    #     dialog = PersonNameDialog(current_name, self)
+    #     if dialog.exec() == QDialog.DialogCode.Accepted:
+    #         new_name = dialog.get_name()
+    #         if new_name and new_name != current_name:
+    #             if self.db_manager.update_person_name(person_id, new_name):
+    #                 self.refresh_data()
+    #                 self.needs_refresh.emit()
     def rename_person(self, person_id, current_name):
-        """Переименовывает персону"""
-        dialog = PersonNameDialog(current_name, self)
+        """Переименовывает персону или сливает с существующей (предотвращает дубли)"""
+        dialog = PersonNameDialog(current_name, self.db_manager, person_id, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            new_name = dialog.get_name()
-            if new_name and new_name != current_name:
-                if self.db_manager.update_person_name(person_id, new_name):
-                    self.refresh_data()
-                    self.needs_refresh.emit()
+            new_name = dialog.get_name_and_target()[0]  # Только имя, игнор target_id
+            if not new_name or new_name == current_name:
+                return
+                
+            print(f"[DEBUG] Rename: {current_name} (id={person_id}) -> '{new_name}'")  # Лог для отладки
+            
+            try:
+                # Ищем существующую персону по имени (первый match)
+                target_id = self.db_manager.get_person_by_name(new_name)
+                
+                if target_id and target_id != person_id:
+                    # МЕРДЖ: все лица в target + DELETE текущей
+                    print(f"[DEBUG] Merge: {person_id} -> {target_id}")
+                    if self.db_manager.merge_persons(person_id, target_id):
+                        success_msg = f"Лица '{current_name}' **слиты** с '{new_name}' (id={target_id})"
+                    else:
+                        raise Exception("Ошибка слияния")
+                else:
+                    # Обычное переименование (если имя новое)
+                    print(f"[DEBUG] Rename to new name: '{new_name}' (no target)")
+                    if self.db_manager.update_person_name(person_id, new_name):
+                        success_msg = f"Персона переименована в **новое** имя '{new_name}'"
+                    else:
+                        raise Exception("Ошибка переименования")
+                
+                print(f"[DEBUG] Успех: {success_msg}")
+                QMessageBox.information(self, "Успех", success_msg)
+                self.refresh_data()
+                self.needs_refresh.emit()
+                
+            except Exception as e:
+                error_msg = f"Ошибка операции: {e}"
+                print(f"[ERROR] {error_msg}")
+                QMessageBox.critical(self, "Ошибка", error_msg)
                     
     def confirm_person(self, person_id):
         """Подтверждает персону"""

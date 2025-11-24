@@ -84,7 +84,7 @@ class ExportTask(QRunnable):
             return False, f"Ошибка экспорта: {e}"
 
     def _export_person_album(self, person_id, person_name, output_path, 
-                           processed_before, total_photos):
+                       processed_before, total_photos):
         """Экспортирует альбом для конкретной персоны"""
         try:
             # Создаем основную папку альбома
@@ -99,27 +99,36 @@ class ExportTask(QRunnable):
             single_photos = self.db_manager.get_single_photos(person_id)
             group_photos = self.db_manager.get_photos_with_multiple_faces(person_id)
 
-            # Экспортируем одиночные фотографии
+            # НОВОЕ: Вычисляем ширину номера для одиночных (твоя маска)
+            total_single = len(single_photos)
+            num_digits = len(str(total_single)) + 1 if total_single > 0 else 1
+
+            # Экспортируем одиночные фотографии (С НОВЫМИ ИМЕНАМИ!)
             for i, (file_path, file_name, confidence) in enumerate(single_photos):
                 if self.is_cancelled:
                     return False, "Экспорт отменен"
                     
-                processed_photos = processed_before + i + 1
+                processed_this = processed_before + i + 1
                 self.signals.progress_updated.emit(
-                    processed_photos, total_photos, 
-                    f"Экспорт {person_name}: {file_name}"
+                    processed_this, total_photos, 
+                    f"Экспорт {person_name}: одиночная #{i+1:0{num_digits}d} ({file_name})"
                 )
 
-                self._copy_photo(file_path, album_path, file_name)
+                # НОВОЕ: Маска имени "Имя_Персоны_NNN.ext"
+                num_str = f"{i+1:0{num_digits}d}"
+                base_name, ext = os.path.splitext(file_name)
+                new_filename = f"{person_name}_{num_str}{ext}"
+                target_path = os.path.join(album_path, new_filename)
+                shutil.copy2(file_path, target_path)
 
-            # Экспортируем групповые фотографии
+            # Экспортируем групповые фотографии (оригинальные имена)
             for i, (file_path, file_name, other_persons) in enumerate(group_photos):
                 if self.is_cancelled:
                     return False, "Экспорт отменен"
                     
-                processed_photos = processed_before + len(single_photos) + i + 1
+                processed_this = processed_before + len(single_photos) + i + 1
                 self.signals.progress_updated.emit(
-                    processed_photos, total_photos,
+                    processed_this, total_photos,
                     f"Экспорт {person_name} с друзьями: {file_name}"
                 )
 
@@ -127,12 +136,12 @@ class ExportTask(QRunnable):
 
             # Создаем информационный файл
             self._create_info_file(album_path, person_name, 
-                                 len(single_photos), len(group_photos))
+                                len(single_photos), len(group_photos))
 
             logger.info(f"Альбом создан: {album_path} "
-                       f"({len(single_photos)} одиночных, "
-                       f"{len(group_photos)} с друзьями)")
-                       
+                    f"({len(single_photos)} одиночных, "
+                    f"{len(group_photos)} с друзьями)")
+                    
             return True, "Успех"
             
         except Exception as e:

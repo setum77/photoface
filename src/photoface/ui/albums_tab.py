@@ -431,15 +431,20 @@ class AlbumsTab(QWidget):
             no_photos_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.photos_layout.addWidget(no_photos_label, 0, 0)
             return
-            
+
+        # ИНИЦИАЛИЗАЦИЯ ПЕРЕМЕННЫХ ДЛЯ СЕТКИ
+        row = 0
+        col = 0
+        max_cols = 4     
+        
         # Отображаем одиночные фотографии
         if single_photos:
             single_label = QLabel("<b>Одиночные фотографии:</b>")
             single_label.setStyleSheet("margin-top: 10px; margin-bottom: 5px;")
-            self.photos_layout.addWidget(single_label, 0, 0, 1, 4)
+            self.photos_layout.addWidget(single_label, row, 0, 1, max_cols)
             
-            row, col = 1, 0
-            max_cols = 4
+            row += 1
+            col = 0
             
             for file_path, file_name, confidence in single_photos:
                 photo_widget = AlbumThumbnailWidget(file_path, file_name, False)
@@ -451,13 +456,14 @@ class AlbumsTab(QWidget):
                     col = 0
                     row += 1
                     
-            row += 1  # Добавляем отступ
+            row += 1  # Отступ после блока
+            col = 0  # Сброс для следующего блока
             
         # Отображаем групповые фотографии
         if group_photos:
             group_label = QLabel("<b>Фотографии с друзьями:</b>")
             group_label.setStyleSheet("margin-top: 10px; margin-bottom: 5px;")
-            self.photos_layout.addWidget(group_label, row, 0, 1, 4)
+            self.photos_layout.addWidget(group_label, row, 0, 1, max_cols)
             
             row += 1
             col = 0
