@@ -1,32 +1,32 @@
 import os
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QPushButton, QGraphicsView, QGraphicsScene, 
-                             QGraphicsPixmapItem, QLineEdit, QDialog, 
-                             QDialogButtonBox, QMessageBox, QMenu)
-from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QRectF, QTimer
-from PyQt6.QtGui import (QPixmap, QImage, QPainter, QPen, QColor, QFont,
-                         QMouseEvent, QKeyEvent, QAction)
-from PIL import Image, ImageDraw, ImageFont
-import cv2
-import numpy as np
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGraphicsView, QGraphicsScene,
+    QGraphicsPixmapItem, QLineEdit, QDialog, QDialogButtonBox, QMessageBox, QMenu,
+)
+from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QTimer, QPointF
+from PyQt6.QtGui import (
+    QPixmap, QPainter, QPen, QColor, QFont, QMouseEvent, QKeyEvent, QAction,
+)
+from PIL import Image
+from tkinter import filedialog  # Для совместимости, но не используется в PyQt
+import traceback
 
 class FaceEditDialog(QDialog):
     """Диалог для редактирования имени лица"""
     
     def __init__(self, current_name="", parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Изменить имя")
+        self.setWindowTitle("Изменить имя лица")
         self.setModal(True)
         self.setFixedSize(300, 120)
         self.init_ui(current_name)
         
     def init_ui(self, current_name):
         layout = QVBoxLayout(self)
-        
         layout.addWidget(QLabel("Имя человека:"))
         
         self.name_edit = QLineEdit()
-        self.name_edit.setText(current_name)
+        self.name_edit.setText(current_name or "")
         self.name_edit.selectAll()
         self.name_edit.returnPressed.connect(self.accept)
         layout.addWidget(self.name_edit)
@@ -42,101 +42,94 @@ class FaceEditDialog(QDialog):
         return self.name_edit.text().strip()
 
 class FaceRectangle:
-    """Класс для представления рамки лица"""
+    """Представление рамки лица в scene coordinates"""
     
-    def __init__(self, face_id, bbox, person_name, confidence, image_size):
+    def __init__(self, face_id, bbox, person_name, confidence):
+        # bbox: (x1, y1, x2, y2) в оригинальных пикселях
         self.face_id = face_id
-        self.bbox = bbox  # (x1, y1, x2, y2)
-        self.person_name = person_name
+        self.scene_rect = QRectF(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[2] - bbox[1])
+        self.person_name = person_name or "Unknown"
         self.confidence = confidence
-        self.image_size = image_size  # (width, height)
         self.is_hovered = False
-        self.edit_mode = False
-
-    def contains_point(self, point, view_scale=1.0, image_scale=1.0):
-        """Проверяет, содержит ли рамка точку с учетом масштабов"""
-        x1, y1, x2, y2 = self.get_scaled_bbox(view_scale, image_scale)
-        return x1 <= point.x() <= x2 and y1 <= point.y() <= y2
         
-    def get_scaled_bbox(self, view_scale=1.0, image_scale=1.0):
-        """Возвращает координаты рамки с учетом масштаба просмотра и исходного изображения"""
-        x1, y1, x2, y2 = self.bbox
+    def contains_scene_point(self, scene_pos):
+        """Проверка наведения/клика в scene coordinates"""
+        return self.scene_rect.contains(scene_pos)
         
-        # print(f"Оригинальные координаты: ({x1}, {y1}, {x2}, {y2})")  # Отладка
-        # print(f"Масштабы: view={view_scale}, image={image_scale}")  # Отладка
+    def draw(self, painter, view):
+        """Рисует рамку в viewport coordinates"""
+        # viewport_rect = view.mapFromScene(self.scene_rect).boundingRect()
+        # scene_r = self.scene_rect.toRectF()
+        viewport_rect = view.mapFromScene(self.scene_rect).boundingRect()
+        # viewport_rect = view.mapFromScene(scene_r).boundingRect()
         
-        # Применяем масштаб исходного изображения
-        x1_scaled = x1 * image_scale
-        y1_scaled = y1 * image_scale
-        x2_scaled = x2 * image_scale
-        y2_scaled = y2 * image_scale
-        
-        # Применяем масштаб просмотра
-        x1_scaled *= view_scale
-        y1_scaled *= view_scale
-        x2_scaled *= view_scale
-        y2_scaled *= view_scale
-        
-        # print(f"Масштабированные координаты: ({x1_scaled}, {y1_scaled}, {x2_scaled}, {y2_scaled})")  # Отладка
-        
-        return x1_scaled, y1_scaled, x2_scaled, y2_scaled
-        
-    def draw(self, painter, view_scale=1.0, image_scale=1.0):
-        """Рисует рамку на QPainter с учетом масштабов"""
-        x1, y1, x2, y2 = self.get_scaled_bbox(view_scale, image_scale)
-        
-        # Цвет рамки в зависимости от подтверждения
-        if self.person_name and self.person_name != 'not recognized':
-            color = QColor(0, 255, 0)  # Зеленый для распознанных
-        else:
-            color = QColor(255, 255, 0)  # Желтый для нераспознанных
-            
+        # Цвет: зеленый для известных, желтый для unknown
+        color = QColor(0, 255, 0) if self.person_name != "Unknown" else QColor(255, 255, 0)
         if self.is_hovered:
-            color = color.lighter(150)  # Осветляем при наведении
+            color = color.lighter(150)
             
-        pen = QPen(color)
-        pen.setWidth(max(2, int(3 * view_scale)))  # Масштабируем толщину линии
+        pen = QPen(color, max(2, 3))
         painter.setPen(pen)
+        painter.drawRect(viewport_rect)
         
-        # Рисуем прямоугольник
-        painter.drawRect(int(x1), int(y1), int(x2 - x1), int(y2 - y1))
+        # Текст только при достаточном масштабе
+        if view.transform().m11() > 0.5:
+            self._draw_label(painter, view, viewport_rect)
+    
+    # def _draw_label(self, painter, view, viewport_rect):
+    #     text = self.person_name
+    #     if self.confidence < 0.9:
+    #         text += f" ({self.confidence:.2f})"
+            
+    #     font = QFont("Arial", max(8, 12))
+    #     font.setBold(True)
+    #     painter.setFont(font)
+    #     metrics = painter.fontMetrics()
+    #     text_rect = metrics.boundingRect(text)
         
-        # Рисуем текст с именем (только при достаточном масштабе)
-        if view_scale > 0.3:  # Не показываем текст при сильном уменьшении
-            font = QFont()
-            font.setPointSize(max(8, int(12 * view_scale)))
-            font.setBold(True)
-            painter.setFont(font)
+    #     # Позиция текста над rect
+    #     text_pos = QPointF(viewport_rect.topLeft()) + QPointF(0, -5)
+    #     if text_pos.y() < 0:
+    #         text_pos = QPointF(viewport_rect.bottomLeft()) + QPointF(0, 5)
             
-            text = self.person_name if self.person_name else 'Unknown'
-            if self.confidence < 0.9:  # Показываем confidence если низкий
-                text += f" ({self.confidence:.2f})"
-                
-            text_rect = painter.fontMetrics().boundingRect(text)
-            text_width = text_rect.width()
-            text_height = text_rect.height()
+    #     # Фон
+    #     painter.fillRect(
+    #         text_pos.x() - 2, text_pos.y() - text_rect.height() - 2,
+    #         text_rect.width() + 4, text_rect.height() + 4,
+    #         QColor(0, 0, 0, 180)
+    #     )
+    #     # Текст
+    #     painter.setPen(QColor(255, 255, 255))
+    #     painter.drawText(text_pos, text_rect.height(), text)
+    def _draw_label(self, painter, view, viewport_rect):
+        text = self.person_name
+        if self.confidence < 0.9:
+            text += f" ({self.confidence:.2f})"
             
-            # Позиционируем текст над рамкой
-            text_x = x1
-            text_y = y1 - text_height - 5
-            
-            # Если текст выходит за границы, перемещаем его
-            if text_y < 0:
-                text_y = y2 + 5
-                
-            # Рисуем фон для текста
-            painter.fillRect(
-                int(text_x) - 2, int(text_y) - 2,
-                text_width + 4, text_height + 4,
-                QColor(0, 0, 0, 180)
-            )
-            
-            # Рисуем текст
-            painter.setPen(QColor(255, 255, 255))
-            painter.drawText(int(text_x), int(text_y) + text_height - 3, text)
+        font = QFont("Arial", max(8, 12))
+        font.setBold(True)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        text_size = metrics.size(0, text)  # QRectF-like size
+        
+        # Позиция текста (QPointF)
+        text_pos = QPointF(viewport_rect.topLeft()) + QPointF(0, -5)
+        if text_pos.y() < 0:
+            text_pos = QPointF(viewport_rect.bottomLeft()) + QPointF(0, 5)
+        
+        # Фон как QRectF (поддерживает float)
+        bg_rect = QRectF(
+            text_pos.x() - 2, text_pos.y() - text_size.height() - 2,
+            text_size.width() + 4, text_size.height() + 4
+        )
+        painter.fillRect(bg_rect, QColor(0, 0, 0, 180))
+        
+        # Текст
+        painter.setPen(QColor(255, 255, 255))
+        painter.drawText(bg_rect, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextSingleLine, text)
 
 class PhotoViewer(QGraphicsView):
-    """Виджет для просмотра фотографий с рамками лиц"""
+    """Просмотрщик фото с оверлеем рамок лиц"""
     
     face_name_changed = pyqtSignal(int, str)  # face_id, new_name
     closed = pyqtSignal()
@@ -147,324 +140,158 @@ class PhotoViewer(QGraphicsView):
         self.config = config
         self.current_image_path = None
         self.face_rectangles = []
-        self.scale_factor = 1.0
-        current_image_scale = 1.0
-        self.init_ui()
+        self._init_ui()
         
-    def init_ui(self):
-        self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    def _init_ui(self):
+        self.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
-        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         
-        # Включаем прокрутку
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        
-        # Сцена для отображения изображения
         self.scene = QGraphicsScene()
         self.setScene(self.scene)
-        
-        # Элемент изображения
         self.pixmap_item = QGraphicsPixmapItem()
         self.scene.addItem(self.pixmap_item)
         
-        # Таймер для скрытия курсора
-        self.cursor_timer = QTimer()
-        self.cursor_timer.timeout.connect(self.hide_cursor)
-        self.cursor_timer.setSingleShot(True)
-        
-        # Устанавливаем обработчики событий
         self.setMouseTracking(True)
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
+        print("Viewer DPR:", self.devicePixelRatioF())  # Test
         
     def load_image(self, image_path):
-        """Загружает изображение и информацию о лицах"""
-        print(f"PhotoViewer: загрузка изображения {image_path}")
-        self.current_image_path = image_path
-        
+        """Загружает изображение и лица"""
         if not os.path.exists(image_path):
             QMessageBox.warning(self, "Ошибка", "Файл не существует")
             return False
             
-        try:
-            # Загружаем изображение
-            pixmap = QPixmap(image_path)
-            if pixmap.isNull():
-                print(f"Не удалось загрузить изображение: {image_path}")
-                QMessageBox.warning(self, "Ошибка", "Не удалось загрузить изображение")
-                return False
-                
-            self.pixmap_item.setPixmap(pixmap)
-            self.scene.setSceneRect(QRectF(pixmap.rect()))
-            
-            # Получаем информацию о лицах из базы данных
-            self.load_face_data(image_path)
-            
-            # Автоматически подгоняем размер под виджет
-            self.fit_to_view()
-            
-            # Запускаем таймер скрытия курсора
-            self.cursor_timer.start(2000)
-            
-            print("Изображение успешно загружено в PhotoViewer")
-            return True
-            
-        except Exception as e:
-            print(f"Ошибка загрузки изображения в PhotoViewer: {e}")
-            QMessageBox.critical(self, "Ошибка", f"Ошибка загрузки изображения: {e}")
+        pixmap = QPixmap(image_path)
+        dpr = self.devicePixelRatioF()  # HiDPI factor
+        pixmap.setDevicePixelRatio(dpr)
+        print(f"Pixmap logical size: {pixmap.width()}x{pixmap.height()} DPR: {dpr}")
+        if pixmap.isNull():
+            QMessageBox.warning(self, "Ошибка", "Не удалось загрузить изображение")
             return False
             
-    def load_face_data(self, image_path):
-        """Загружает данные о лицах для изображения"""
-        self.face_rectangles = []
+        self.current_image_path = image_path
+        self.pixmap_item.setPixmap(pixmap)
+        self.scene.setSceneRect(QRectF(pixmap.rect()))
+        # self.scene.setSceneRect(QRectF(0, 0, pixmap.widthF(), pixmap.heightF()))
         
+        self.face_rectangles.clear()
+        self.load_face_data(image_path)
+        
+        self.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        return True
+        
+    def load_face_data(self, image_path):
+        """Загружает лица из БД"""
+        self.face_rectangles.clear()
         try:
-            # Получаем информацию об изображении из БД
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT i.id FROM images i WHERE i.file_path = ?
-                ''', (image_path,))
-                result = cursor.fetchone()
                 
-                if not result:
+                # Получаем image_id
+                cursor.execute("SELECT id FROM images WHERE file_path = ?", (image_path,))
+                img_row = cursor.fetchone()
+                if not img_row:
+                    print(f"Изображение {image_path} не в БД")
                     return
-                    
-                image_id = result[0]
+                image_id = img_row[0]
                 
-                # Получаем все лица для этого изображения
-                cursor.execute('''
+                # Лица (bbox уже absolute!)
+                cursor.execute("""
                     SELECT f.id, f.bbox_x1, f.bbox_y1, f.bbox_x2, f.bbox_y2, 
-                           f.confidence, p.name
-                    FROM faces f
-                    JOIN persons p ON f.person_id = p.id
+                        f.confidence, COALESCE(p.name, 'Unknown')
+                    FROM faces f LEFT JOIN persons p ON f.person_id = p.id
                     WHERE f.image_id = ?
-                ''', (image_id,))
+                """, (image_id,))
                 
-                faces = cursor.fetchall()
+                faces_data = cursor.fetchall()
+                print(f"Найдено лиц для {image_path}: {len(faces_data)}")
                 
-                # Получаем размер оригинального изображения
-                from PIL import Image
-                with Image.open(image_path) as img:
-                    image_size = img.size
-                
-                # Создаем объекты рамок
-                for face_id, x1, y1, x2, y2, confidence, person_name in faces:
-                    face_rect = FaceRectangle(
-                        face_id=face_id,
-                        bbox=(x1, y1, x2, y2),
-                        person_name=person_name,
-                        confidence=confidence,
-                        image_size=image_size
-                    )
-                    self.face_rectangles.append(face_rect)
+                for face_id, x1, y1, x2, y2, conf, name in faces_data:
+                    bbox = (x1, y1, x2, y2)  # Уже absolute pixels!
+                    print(f"  Лицо {face_id}: bbox({x1:.0f},{y1:.0f},{x2:.0f},{y2:.0f}) size({x2-x1:.0f}x{y2-y1:.0f})")
+                    
+                    self.face_rectangles.append(FaceRectangle(face_id, bbox, name, conf))
                     
         except Exception as e:
-            print(f"Ошибка загрузки данных о лицах: {e}")
-            
+            print(f"Ошибка load_face_data {image_path}: {e}")
+            traceback.print_exc()
+    
     def drawForeground(self, painter, rect):
-        """Переопределяем метод для рисования рамок поверх изображения"""
+        """Рисует оверлей рамок"""
         if not self.face_rectangles:
             return
-            
-        # Сохраняем состояние painter
         painter.save()
-        
-        # Получаем текущий масштаб просмотра
-        transform = self.transform()
-        view_scale = transform.m11()  # Горизонтальный масштаб
-        
-        # Получаем масштаб изображения относительно оригинала
-        image_scale = getattr(self, 'current_image_scale', 1.0)
-        
-        # Отладочная информация (можно убрать после исправления)
-        if not hasattr(self, '_debug_printed'):
-            print(f"Debug - View scale: {view_scale}, Image scale: {image_scale}")
-            print(f"Debug - Face rectangles count: {len(self.face_rectangles)}")
-            if self.face_rectangles:
-                print(f"Debug - Original bbox: {self.face_rectangles[0].bbox}")
-                scaled_bbox = self.face_rectangles[0].get_scaled_bbox(view_scale, image_scale)
-                print(f"Debug - Scaled bbox: {scaled_bbox}")
-            self._debug_printed = True
-        
-        # Рисуем все рамки
-        for face_rect in self.face_rectangles:
-            face_rect.draw(painter, view_scale, image_scale)
-            
+        for rect_item in self.face_rectangles:
+            rect_item.draw(painter, self)
         painter.restore()
         
     def mouseMoveEvent(self, event):
-        """Обрабатывает движение мыши"""
-        # Сбрасываем таймер скрытия курсора
-        self.cursor_timer.start(2000)
-        self.setCursor(Qt.CursorShape.ArrowCursor)
-        
-        # Получаем текущие масштабы
-        transform = self.transform()
-        view_scale = transform.m11()
-        image_scale = getattr(self, 'current_image_scale', 1.0)
-        
-        # Проверяем наведение на рамки
+        """Наведение на рамки"""
         scene_pos = self.mapToScene(event.pos())
-        any_hovered = False
-        
+        hovered = False
         for face_rect in self.face_rectangles:
             was_hovered = face_rect.is_hovered
-            face_rect.is_hovered = face_rect.contains_point(scene_pos, view_scale, image_scale)
-            
+            face_rect.is_hovered = face_rect.contains_scene_point(scene_pos)
             if face_rect.is_hovered:
-                any_hovered = True
-                self.setCursor(Qt.CursorShape.PointingHandCursor)
+                hovered = True
+            if face_rect.is_hovered != was_hovered:
+                self.viewport().update()
+                # self.viewport().update(self.mapToScene(event.pos()).boundingRect().adjusted(-50, -50, 50, 50))  # Локальный redraw
                 
-            # Обновляем сцену если состояние изменилось
-            if was_hovered != face_rect.is_hovered:
-                self.scene.update()
-                
+        # self.setCursor(Qt.PointingHandCursor if hovered else Qt.ArrowCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor if hovered else Qt.CursorShape.ArrowCursor)
         super().mouseMoveEvent(event)
         
     def mousePressEvent(self, event):
-        """Обрабатывает клик мыши"""
+        # if event.button() == Qt.LeftButton:
         if event.button() == Qt.MouseButton.LeftButton:
-            # Получаем текущие масштабы
-            transform = self.transform()
-            view_scale = transform.m11()
-            image_scale = getattr(self, 'current_image_scale', 1.0)
-            
             scene_pos = self.mapToScene(event.pos())
-            
-            # Проверяем клик по рамке
             for face_rect in self.face_rectangles:
-                if face_rect.contains_point(scene_pos, view_scale, image_scale):
+                if face_rect.contains_scene_point(scene_pos):
                     self.edit_face_name(face_rect)
                     break
-                    
         super().mousePressEvent(event)
         
-    def mouseDoubleClickEvent(self, event):
-        """Обрабатывает двойной клик - закрытие просмотра"""
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.close_viewer()
-        else:
-            super().mouseDoubleClickEvent(event)
-            
+    def wheelEvent(self, event):
+        """Zoom колесиком"""
+        factor = 1.25 if event.angleDelta().y() > 0 else 0.8
+        self.scale(factor, factor)
+        
     def keyPressEvent(self, event):
-        """Обрабатывает нажатия клавиш"""
         if event.key() == Qt.Key.Key_Escape:
-            self.close_viewer()
-        elif event.key() == Qt.Key.Key_Plus or event.key() == Qt.Key.Key_Equal:
-            self.zoom_in()
+            self.closed.emit()
+        elif event.key() in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+            self.scale(1.2, 1.2)
         elif event.key() == Qt.Key.Key_Minus:
-            self.zoom_out()
+            self.scale(0.8, 0.8)
         elif event.key() == Qt.Key.Key_0:
-            self.fit_to_view()
-        elif event.key() == Qt.Key.Key_F:
-            self.toggle_fullscreen()
-        else:
-            super().keyPressEvent(event)
-            
+            self.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        super().keyPressEvent(event)
+        
     def edit_face_name(self, face_rect):
-        """Редактирует имя лица"""
         dialog = FaceEditDialog(face_rect.person_name, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
+        # if dialog.exec() == QDialog.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:    
             new_name = dialog.get_name()
             if new_name and new_name != face_rect.person_name:
-                # Обновляем в базе данных
-                if self.update_face_name(face_rect.face_id, new_name):
+                if self._update_face_name(face_rect.face_id, new_name):
                     face_rect.person_name = new_name
-                    self.scene.update()
+                    self.viewport().update()
                     self.face_name_changed.emit(face_rect.face_id, new_name)
                     
-    def update_face_name(self, face_id, new_name):
-        """Обновляет имя лица в базе данных"""
+    def _update_face_name(self, face_id, new_name):
         try:
-            # Находим или создаем персону с новым именем
             person_id = self.db_manager.get_person_by_name(new_name)
             if not person_id:
                 person_id = self.db_manager.create_person(new_name)
-                
-            if person_id:
-                # Перемещаем лицо к новой персоне
-                return self.db_manager.move_face_to_person(face_id, person_id)
-                
+            return person_id and self.db_manager.move_face_to_person(face_id, person_id)
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Ошибка обновления имени: {e}")
-            
-        return False
-        
-    def zoom_in(self):
-        """Увеличивает масштаб"""
-        self.scale(1.2, 1.2)
-        
-    def zoom_out(self):
-        """Уменьшает масштаб"""
-        self.scale(0.8, 0.8)
-        
-    def fit_to_view(self):
-        """Подгоняет изображение под размер виджета"""
-        if not self.scene.itemsBoundingRect().isEmpty():
-            # Подгоняем с сохранением пропорций
-            self.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
-            # Обновляем масштаб
-            self.update_image_scale()
-            # Обновляем сцену
-            self.scene.update()
-
-    def toggle_fullscreen(self):
-        """Переключает полноэкранный режим"""
-        if self.parent() and hasattr(self.parent(), 'toggle_fullscreen'):
-            self.parent().toggle_fullscreen()
-            
-    def hide_cursor(self):
-        """Скрывает курсор"""
-        self.setCursor(Qt.CursorShape.BlankCursor)
-        
-    def close_viewer(self):
-        """Закрывает просмотрщик"""
-        self.closed.emit()
-
-    def update_image_scale(self):
-        """Обновляет масштаб изображения при изменении размера"""
-        if not self.scene.itemsBoundingRect().isEmpty() and self.face_rectangles:
-            # Получаем размер оригинального изображения
-            orig_width, orig_height = self.face_rectangles[0].image_size
-            
-            # Получаем размер viewport (видимой области)
-            viewport_size = self.viewport().size()
-            viewport_width = viewport_size.width()
-            viewport_height = viewport_size.height()
-            
-            # Получаем размер сцены (оригинального изображения)
-            scene_rect = self.scene.itemsBoundingRect()
-            scene_width = scene_rect.width()
-            scene_height = scene_rect.height()
-            
-            # Вычисляем фактический масштаб отображения
-            if scene_width > 0 and scene_height > 0 and viewport_width > 0 and viewport_height > 0:
-                # Масштаб вычисляем на основе того, как изображение фактически отображается
-                # в viewport с учетом режима KeepAspectRatio
-                scale_x = viewport_width / scene_width
-                scale_y = viewport_height / scene_height
-                
-                # В режиме KeepAspectRatio используется минимальный масштаб
-                self.current_image_scale = min(scale_x, scale_y)
-                
-                print(f"Updated image scale: {self.current_image_scale:.3f}")  # Для отладки
-                print(f"Original: {orig_width}x{orig_height}, Scene: {scene_width:.1f}x{scene_height:.1f}, Viewport: {viewport_width}x{viewport_height}")
-            else:
-                self.current_image_scale = 1.0
-
-    def resizeEvent(self, event):
-        """Обрабатывает изменение размера виджета"""
-        super().resizeEvent(event)
-        # Обновляем масштаб при изменении размера
-        # self.update_image_scale()
-        # Обновляем масштаб при изменении размера с небольшой задержкой
-        QTimer.singleShot(50, self.update_image_scale)
-        self.scene.update()
+            QMessageBox.critical(self, "Ошибка", f"Ошибка обновления: {e}")
+            return False
 
 class PhotoViewerWindow(QWidget):
-    """Оконный просмотрщик фотографий"""
+    """Главное окно просмотра"""
     
     closed = pyqtSignal()
     
@@ -472,357 +299,97 @@ class PhotoViewerWindow(QWidget):
         super().__init__(parent)
         self.db_manager = db_manager
         self.config = config
-        self.init_ui()
+        self.is_fullscreen = False
+        self._init_ui()
         
-    def init_ui(self):
+    def _init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         
-        # Создаем просмотрщик
-        self.photo_viewer = PhotoViewer(self.db_manager, self.config, self)
-        self.photo_viewer.closed.connect(self.close)
-        self.photo_viewer.face_name_changed.connect(self.on_face_name_changed)
-        
-        layout.addWidget(self.photo_viewer)
+        self.viewer = PhotoViewer(self.db_manager, self.config, self)
+        self.viewer.closed.connect(self.close)
+        layout.addWidget(self.viewer)
         
         # Панель управления
-        self.control_panel = QWidget()
-        self.control_panel.setFixedHeight(40)
-        control_layout = QHBoxLayout(self.control_panel)
-        control_layout.setContentsMargins(5, 2, 5, 2)
+        self._create_control_panel()
         
-        # self.control_panel.setStyleSheet("""
-        #     QWidget {
-        #         background-color: rgba(0, 0, 0, 150);
-        #         border-radius: 5px;
-        #     }
-        # """)
+        self.setWindowTitle("Photo Viewer")
+        self.resize(1200, 800)
+        
+    def _create_control_panel(self):
+        self.control_panel = QWidget()
+        self.control_panel.setFixedHeight(45)
+        layout = QHBoxLayout(self.control_panel)
+        layout.setContentsMargins(10, 5, 10, 5)
+        
         self.control_panel.setStyleSheet("""
-            QWidget {
-                background-color: rgba(0, 0, 0, 180);
-                border-radius: 8px;
-                padding: 5px;
-            }
-            QPushButton {
-                background-color: rgba(255, 255, 255, 200);
-                border: 1px solid rgba(0, 0, 0, 100);
-                border-radius: 4px;
-                padding: 5px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: rgba(255, 255, 255, 255);
-            }
+            QWidget { background: rgba(0,0,0,0.7); border-radius: 8px; color: white; }
+            QPushButton { background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); 
+                          border-radius: 4px; padding: 5px; min-width: 30px; color: white; font-weight: bold; }
+            QPushButton:hover { background: rgba(255,255,255,0.4); }
         """)
         
-        # Кнопки управления
-        self.zoom_in_btn = QPushButton("+")
-        self.zoom_in_btn.setFixedSize(30, 30)
-        self.zoom_in_btn.clicked.connect(self.photo_viewer.zoom_in)
-        self.zoom_in_btn.setToolTip("Увеличить")
+        btns = [
+            ("+", self.viewer.scale, (1.2, 1.2), "Zoom In"),
+            ("-", self.viewer.scale, (0.8, 0.8), "Zoom Out"),
+            # ("Fit", lambda: self.viewer.fitInView(self.viewer.scene.itemsBoundingRect(), Qt.KeepAspectRatio), None, "Fit to Window"),
+            ("Fit", lambda: self.viewer.fitInView(self.viewer.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio), None, "Fit to Window"),
+
+            ("FS", self.toggle_fullscreen, None, "Fullscreen (F)"),
+            ("✕", self.close, None, "Close (Esc)"),
+        ]
         
-        self.zoom_out_btn = QPushButton("-")
-        self.zoom_out_btn.setFixedSize(30, 30)
-        self.zoom_out_btn.clicked.connect(self.photo_viewer.zoom_out)
-        self.zoom_out_btn.setToolTip("Уменьшить")
+        for text, func, args, tip in btns:
+            btn = QPushButton(text)
+            btn.setToolTip(tip)
+            if args:
+                btn.clicked.connect(lambda _, f=func, a=args: f(*a))
+            else:
+                btn.clicked.connect(func)
+            layout.addWidget(btn)
         
-        self.fit_btn = QPushButton("Fit")
-        self.fit_btn.setFixedSize(40, 30)
-        self.fit_btn.clicked.connect(self.photo_viewer.fit_to_view)
-        self.fit_btn.setToolTip("Подогнать под окно")
-        
-        self.close_btn = QPushButton("Закрыть (Esc)")
-        self.close_btn.setFixedSize(100, 30)
-        self.close_btn.clicked.connect(self.close)
-        
-        control_layout.addWidget(self.zoom_in_btn)
-        control_layout.addWidget(self.zoom_out_btn)
-        control_layout.addWidget(self.fit_btn)
-        control_layout.addStretch()
-        control_layout.addWidget(self.close_btn)
-        
-        # Размещаем панель управления поверх просмотрщика
+        layout.addStretch()
         self.control_panel.setParent(self)
-        self.control_panel.move(20, 20)
-        
-        # Настройки окна
-        self.setWindowTitle("Просмотр фотографии")
-        self.setGeometry(100, 100, 1000, 700)
-        self.setMinimumSize(400, 300)
         
     def show_image(self, image_path):
-        """Показывает изображение в окне"""
-        print(f"PhotoViewerWindow: показ изображения {image_path}")
-        
-        if self.photo_viewer.load_image(image_path):
-            # Сразу подгоняем изображение под окно
-            # QTimer.singleShot(50, self.photo_viewer.fit_to_view)  # Небольшая задержка для гарантии
-            QTimer.singleShot(100, lambda: [
-                self.photo_viewer.fit_to_view(),
-                self.photo_viewer.update_image_scale()  # Добавляем явный вызов
-            ])
-            
-            # Показываем окно
+        if self.viewer.load_image(image_path):
+            QTimer.singleShot(100, self._auto_fit)
             self.show()
             self.activateWindow()
             self.raise_()
-            
-            # Устанавливаем фокус
-            self.setFocus()
-            
-            print("Окно просмотрщика успешно показано")
             return True
-        
-        print("Не удалось загрузить изображение")
         return False
         
+    def _auto_fit(self):
+        # self.viewer.fitInView(self.viewer.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
+        self.viewer.fitInView(self.viewer.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+        
     def resizeEvent(self, event):
-        """Обрабатывает изменение размера окна"""
         super().resizeEvent(event)
-        # При изменении размера окна автоматически подгоняем изображение
-        QTimer.singleShot(50, self.photo_viewer.fit_to_view)
-    
-        # Перемещаем панель управления в правый верхний угол
+        QTimer.singleShot(50, self._auto_fit)
+        # Переместить панель в угол
         self.control_panel.move(self.width() - self.control_panel.width() - 20, 20)
         
-    def close(self):
-        """Закрывает просмотрщик"""
-        print("Закрытие PhotoViewerWindow")
-        self.closed.emit()
-        super().close()
-        
-    def on_face_name_changed(self, face_id, new_name):
-        """Обрабатывает изменение имени лица"""
-        pass
-        
     def keyPressEvent(self, event):
-        """Обрабатывает нажатия клавиш"""
-        if event.key() == Qt.Key.Key_Escape:
-            self.close()
-        elif event.key() == Qt.Key.Key_F:
+        if event.key() == Qt.Key.Key_F:
             self.toggle_fullscreen()
-        elif event.key() == Qt.Key.Key_0:
-            self.photo_viewer.fit_to_view()
-        else:
-            super().keyPressEvent(event)
-            
-    def toggle_fullscreen(self):
-        """Переключает полноэкранный режим (опционально)"""
-        if self.isFullScreen():
-            self.showNormal()
-        else:
-            self.showFullScreen()
-
-# class FullScreenPhotoViewer(QWidget):
-#     """Полноэкранный просмотрщик фотографий"""
-    
-#     closed = pyqtSignal()
-    
-#     def __init__(self, db_manager, config=None, parent=None):
-#         super().__init__(parent)
-#         self.db_manager = db_manager
-#         self.config = config
-#         self.is_fullscreen = False
-#         self.init_ui()
-        
-#     def init_ui(self):
-#         layout = QVBoxLayout(self)
-#         layout.setContentsMargins(0, 0, 0, 0)
-        
-#         # Создаем просмотрщик
-#         self.photo_viewer = PhotoViewer(self.db_manager, self.config, self)
-#         self.photo_viewer.closed.connect(self.close)
-#         self.photo_viewer.face_name_changed.connect(self.on_face_name_changed)
-        
-#         layout.addWidget(self.photo_viewer)
-        
-#         # Панель управления (изначально скрыта)
-#         self.control_panel = QWidget()
-#         control_layout = QHBoxLayout(self.control_panel)
-#         control_layout.setContentsMargins(10, 5, 10, 5)
-        
-#         self.control_panel.setStyleSheet("""
-#             QWidget {
-#                 background-color: rgba(0, 0, 0, 150);
-#                 border-radius: 5px;
-#             }
-#         """)
-        
-#         # Кнопки управления
-#         self.zoom_in_btn = QPushButton("+")
-#         self.zoom_in_btn.setFixedSize(30, 30)
-#         self.zoom_in_btn.clicked.connect(self.photo_viewer.zoom_in)
-        
-#         self.zoom_out_btn = QPushButton("-")
-#         self.zoom_out_btn.setFixedSize(30, 30)
-#         self.zoom_out_btn.clicked.connect(self.photo_viewer.zoom_out)
-        
-#         self.fit_btn = QPushButton("Fit")
-#         self.fit_btn.setFixedSize(40, 30)
-#         self.fit_btn.clicked.connect(self.photo_viewer.fit_to_view)
-        
-#         self.close_btn = QPushButton("Закрыть (Esc)")
-#         self.close_btn.setFixedSize(100, 30)
-#         self.close_btn.clicked.connect(self.close)
-        
-#         control_layout.addWidget(self.zoom_in_btn)
-#         control_layout.addWidget(self.zoom_out_btn)
-#         control_layout.addWidget(self.fit_btn)
-#         control_layout.addStretch()
-#         control_layout.addWidget(self.close_btn)
-        
-#         # Размещаем панель управления поверх просмотрщика
-#         self.control_panel.setParent(self)
-#         self.control_panel.move(20, 20)
-#         self.control_panel.hide()
-        
-#         # Таймер для скрытия панели управления
-#         self.panel_timer = QTimer()
-#         self.panel_timer.timeout.connect(self.hide_control_panel)
-#         self.panel_timer.setSingleShot(True)
-        
-#     def show_image(self, image_path):
-#         """Показывает изображение в полноэкранном режиме"""
-#         print(f"FullScreenPhotoViewer: показ изображения {image_path}")  # Отладочная информация
-        
-#         if self.photo_viewer.load_image(image_path):
-#             self.show_fullscreen()
-
-#             # Принудительно обновляем отображение
-#             self.update()
-#             self.repaint()
-
-#             return True
-#         print("Не удалось загрузить изображение в FullScreenPhotoViewer")
-#         return False
-#     # def show_image(self, image_path):
-#     #     """Показывает изображение в полноэкранном режиме"""
-#     #     print(f"Попытка загрузить изображение: {image_path}")  # Отладочная информация
-#     #     self.current_image_path = image_path
-        
-#     #     if not os.path.exists(image_path):
-#     #         QMessageBox.warning(self, "Ошибка", "Файл не существует")
-#     #         return False
-            
-#     #     try:
-#     #         # Загружаем изображение
-#     #         pixmap = QPixmap(image_path)
-#     #         if pixmap.isNull():
-#     #             QMessageBox.warning(self, "Ошибка", "Не удалось загрузить изображение")
-#     #             return False
+        elif event.key() == Qt.Key.Key_Escape:
+            if self.is_fullscreen:
+                self.toggle_fullscreen()
+            else:
+                self.close()
+        super().keyPressEvent(event)
                 
-#     #         self.pixmap_item.setPixmap(pixmap)
-#     #         self.scene.setSceneRect(QRectF(pixmap.rect()))
+    def toggle_fullscreen(self):
+        self.is_fullscreen = not self.is_fullscreen
+        if self.is_fullscreen:
+            self.showFullScreen()
+            self.setCursor(Qt.CursorShape.BlankCursor)
+        else:
+            self.showNormal()
+            self.setCursor(Qt.CursorShape.ArrowCursor)
             
-#     #         # Получаем информацию о лицах из базы данных
-#     #         self.load_face_data(image_path)
-            
-#     #         # Подгоняем размер под виджет
-#     #         self.fitInView(self.pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
-            
-#     #         # Запускаем таймер скрытия курсора
-#     #         self.cursor_timer.start(2000)
-            
-#     #         print("Изображение успешно загружено")  # Отладочная информация
-#     #         return True
-            
-#     #     except Exception as e:
-#     #         print(f"Ошибка загрузки изображения: {e}")  # Отладочная информация
-#     #         QMessageBox.critical(self, "Ошибка", f"Ошибка загрузки изображения: {e}")
-#     #         return False
-        
-#     # def show_fullscreen(self):
-#     #     """Показывает виджет в полноэкранном режиме"""
-#     #     self.is_fullscreen = True
-#     #     self.showMaximized()
-#     #     self.raise_()
-#     #     self.activateWindow()
-        
-#     #     # Показываем панель управления на несколько секунд
-#     #     self.show_control_panel()
-#     def show_fullscreen(self):
-#         """Показывает виджет в полноэкранном режиме"""
-#         print("Активация полноэкранного режима")  # Отладочная информация
-        
-#         # Убедимся, что окно правильно инициализировано
-#         print(f"Window flags: {self.windowFlags()}")
-#         print(f"Window state: {self.windowState()}")
-#         print(f"Window visible: {self.isVisible()}")
-        
-#         self.is_fullscreen = True
-        
-#         # Показываем окно перед переходом в полноэкранный режим
-#         self.show()
-#         self.activateWindow()
-#         self.raise_()
-        
-#         # Переходим в полноэкранный режим
-#         self.showFullScreen()
-        
-#         # Убедимся, что окно активно
-#         self.setFocus(Qt.FocusReason.PopupFocusReason)
-        
-#         print(f"После showFullScreen - visible: {self.isVisible()}, active: {self.isActiveWindow()}")
-        
-#         # Показываем панель управления на несколько секунд
-#         self.show_control_panel()
-        
-#     def show_control_panel(self):
-#         """Показывает панель управления"""
-#         self.control_panel.show()
-#         self.control_panel.raise_()
-#         self.panel_timer.start(3000)  # Скрыть через 3 секунды
-        
-#     def hide_control_panel(self):
-#         """Скрывает панель управления"""
-#         if not self.control_panel.underMouse():
-#             self.control_panel.hide()
-            
-#     def mousePressEvent(self, event):
-#         """Обрабатывает клик мыши"""
-#         if event.button() == Qt.MouseButton.LeftButton:
-#             # Показываем панель управления при клике
-#             self.show_control_panel()
-#         super().mousePressEvent(event)
-        
-#     def mouseMoveEvent(self, event):
-#         """Обрабатывает движение мыши"""
-#         # Показываем панель управления при движении мыши
-#         if not self.control_panel.isVisible():
-#             self.show_control_panel()
-#         self.panel_timer.start(3000)  # Перезапускаем таймер
-#         super().mouseMoveEvent(event)
-        
-#     def keyPressEvent(self, event):
-#         """Обрабатывает нажатия клавиш"""
-#         if event.key() == Qt.Key.Key_Escape:
-#             self.close()
-#         elif event.key() == Qt.Key.Key_F:
-#             self.toggle_fullscreen()
-#         else:
-#             super().keyPressEvent(event)
-            
-#     def toggle_fullscreen(self):
-#         """Переключает полноэкранный режим"""
-#         if self.isFullScreen():
-#             self.showNormal()
-#             self.is_fullscreen = False
-#         else:
-#             self.showFullScreen()
-#             self.is_fullscreen = True
-            
-#     def close(self):
-#         """Закрывает просмотрщик"""
-#         print("Закрытие FullScreenPhotoViewer")  # Отладочная информация
-#         self.closed.emit()
-#         super().close()
-        
-#     def on_face_name_changed(self, face_id, new_name):
-#         """Обрабатывает изменение имени лица"""
-#         # Можно добавить дополнительную логику при изменении имени
-#         pass
-#     def showEvent(self, event):
-#         """Обрабатывает событие показа окна"""
-#         super().showEvent(event)
-#         print("showEvent - FullScreenPhotoViewer показан")  # Отладочная информация
-#         self.setFocus()  # Устанавливаем фокус на окно
+    def closeEvent(self, event):
+        self.closed.emit()
+        super().closeEvent(event)

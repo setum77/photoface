@@ -36,11 +36,20 @@ class DatabaseManager:
                     file_path TEXT UNIQUE NOT NULL,
                     file_name TEXT NOT NULL,
                     file_size INTEGER,
+                    orig_width INTEGER DEFAULT 0,
+                    orig_height INTEGER DEFAULT 0,
                     created_time TIMESTAMP,
                     scan_status TEXT DEFAULT 'pending', -- pending, processing, completed, error
                     FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE CASCADE
                 )
             ''')
+            # Авто-добавляем колонки если отсутствуют (миграция)
+            cursor.execute("PRAGMA table_info(images)")
+            cols = {row[1] for row in cursor.fetchall()}
+            if 'orig_width' not in cols:
+                cursor.execute("ALTER TABLE images ADD COLUMN orig_width INTEGER DEFAULT 0")
+            if 'orig_height' not in cols:
+                cursor.execute("ALTER TABLE images ADD COLUMN orig_height INTEGER DEFAULT 0")
 
             # Таблица с персонами
             cursor.execute('''
@@ -192,29 +201,33 @@ class DatabaseManager:
     #             return result[0] if result else None
     def add_image(self, folder_id, file_path, file_name, file_size, created_time):
         """Добавляет изображение в базу данных"""
+        orig_w, orig_h = 0, 0
+        try:
+            from PIL import Image  # Импорт внутри для избежания ошибок
+            with Image.open(file_path) as img:
+                orig_w, orig_h = img.size
+        except Exception as e:
+            logger.warning(f"Не удалось получить размер {file_path}: {e}")
+            
         with self.get_connection() as conn:
             cursor = conn.cursor()
             try:
                 cursor.execute('''
                     INSERT OR IGNORE INTO images 
-                    (folder_id, file_path, file_name, file_size, created_time) 
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (folder_id, file_path, file_name, file_size, created_time))
+                    (folder_id, file_path, file_name, file_size, orig_width, orig_height, created_time) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (folder_id, file_path, file_name, file_size, orig_w, orig_h, created_time))
                 conn.commit()
                 image_id = cursor.lastrowid
                 if image_id:
-                    logger.debug(f"Добавлено изображение: {file_path} (ID: {image_id})")
-                else:
-                    logger.debug(f"Изображение уже существует: {file_path}")
+                    logger.debug(f"Добавлено изображение {file_path}: {orig_w}x{orig_h} (ID: {image_id})")
                 return image_id
             except sqlite3.IntegrityError:
-                # Если изображение уже существует, возвращаем его ID
                 cursor.execute("SELECT id FROM images WHERE file_path = ?", (file_path,))
                 result = cursor.fetchone()
-                logger.debug(f"Изображение уже в БД: {file_path} (ID: {result[0] if result else 'не найден'})")
                 return result[0] if result else None
             except Exception as e:
-                logger.error(f"Ошибка при добавлении изображения {file_path}: {e}")
+                logger.error(f"Ошибка add_image {file_path}: {e}")
                 return None
 
     def get_pending_images(self, folder_id=None):
@@ -614,6 +627,14 @@ class DatabaseManager:
             cursor.execute("DELETE FROM persons WHERE name != 'not recognized'")
             conn.commit()
             logger.info("Очищены все обработанные данные")
+
+    def get_image_dimensions(self, image_id):
+        """Возвращает orig_width, orig_height по image_id"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT orig_width, orig_height FROM images WHERE id = ?", (image_id,))
+            result = cursor.fetchone()
+            return result if result else (0, 0)
 
     # Диагностический метод 
     def debug_face_data(self, image_path):
