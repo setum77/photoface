@@ -124,7 +124,7 @@ class FaceRectangle:
     #     painter.setFont(font)
     #     metrics = painter.fontMetrics()
     #     text_rect = metrics.boundingRect(text)
-        
+    
     #     # Позиция текста над rect
     #     text_pos = QPointF(viewport_rect.topLeft()) + QPointF(0, -5)
     #     if text_pos.y() < 0:
@@ -255,7 +255,7 @@ class PhotoViewer(QGraphicsView):
         self.centerOn(self.pixmap_item.boundingRect().center())
         
         # После загрузки изображения и масштабирования обновляем отображение
-        QTimer.singleShot(100, self._update_face_rectangles_after_scaling)
+        QTimer.singleShot(10, self._update_face_rectangles_after_scaling)
         
         return True
 
@@ -421,11 +421,16 @@ class PhotoViewerWindow(QWidget):
         layout.setContentsMargins(10, 5, 10, 5)
         
         self.control_panel.setStyleSheet("""
-            QWidget { background: rgba(0,0,0,0.7); border-radius: 8px; color: white; }
+            QWidget { background: rgba(0,0,0.7); border-radius: 8px; color: white; }
             QPushButton { background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); 
                           border-radius: 4px; padding: 5px; min-width: 30px; color: white; font-weight: bold; }
             QPushButton:hover { background: rgba(255,255,255,0.4); }
         """)
+        
+        # Add filename label
+        self.filename_label = QLabel("")
+        self.filename_label.setStyleSheet("color: white; font-weight: bold;")
+        layout.addWidget(self.filename_label)
         
         btns = [
             ("+", self.viewer.scale, (1.2, 1.2), "Zoom In"),
@@ -434,6 +439,8 @@ class PhotoViewerWindow(QWidget):
             ("Fit", lambda: self.viewer.fitInView(self.viewer.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio), None, "Fit to Window"),
 
             ("FS", self.toggle_fullscreen, None, "Fullscreen (F)"),
+            ("F2", self.rename_current_file, None, "Rename File"),
+            ("E", self.open_in_external_editor, None, "Open in External Editor"),
             ("✕", self.close, None, "Close (Esc)"),
         ]
         
@@ -451,16 +458,101 @@ class PhotoViewerWindow(QWidget):
         
     def show_image(self, image_path):
         if self.viewer.load_image(image_path):
-            QTimer.singleShot(100, self._auto_fit)
+            QTimer.singleShot(10, self._auto_fit)
             self.show()
             self.activateWindow()
             self.raise_()
+            # Update filename label
+            self.filename_label.setText(os.path.basename(image_path))
             return True
         return False
         
     def _auto_fit(self):
         # self.viewer.fitInView(self.viewer.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
         self.viewer.fitInView(self.viewer.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def rename_current_file(self):
+        """Переименовывает текущий файл"""
+        if not self.viewer.current_image_path:
+            QMessageBox.warning(self, "Ошибка", "Нет загруженного изображения")
+            return
+
+        import os
+        from PyQt6.QtWidgets import QInputDialog
+
+        image_path = self.viewer.current_image_path
+        directory = os.path.dirname(image_path)
+        old_filename = os.path.basename(image_path)
+        name, ext = os.path.splitext(old_filename)
+
+        new_name, ok = QInputDialog.getText(
+            self,
+            "Переименовать файл",
+            "Введите новое имя файла:",
+            text=name
+        )
+
+        if ok and new_name.strip():
+            new_filename = new_name.strip() + ext
+            new_path = os.path.join(directory, new_filename)
+
+            # Проверяем, существует ли уже файл с таким именем
+            if os.path.exists(new_path):
+                QMessageBox.warning(self, "Ошибка", f"Файл {new_filename} уже существует")
+                return
+
+            try:
+                os.rename(image_path, new_path)
+
+                # Обновляем путь к файлу в базе данных
+                self.db_manager.update_image_path(image_path, new_path)
+
+                # Обновляем путь в viewer
+                self.viewer.current_image_path = new_path
+
+                # Обновляем имя файла в интерфейсе
+                self.filename_label.setText(os.path.basename(new_path))
+
+                # QMessageBox.information(self, "Успех", "Файл успешно переименован")
+            except OSError as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось переименовать файл: {e}")
+
+    def open_in_external_editor(self):
+        """Открывает текущий файл во внешнем редакторе"""
+        if not self.viewer.current_image_path:
+            QMessageBox.warning(self, "Ошибка", "Нет загруженного изображения")
+            return
+
+        image_path = self.viewer.current_image_path
+
+        # Получаем путь к внешнему редактору из настроек
+        editor_path = self.config.get_external_editor_path()
+
+        if not editor_path:
+            # Если редактор не задан, предлагаем пользователю его указать
+            from PyQt6.QtWidgets import QFileDialog
+            editor_path, _ = QFileDialog.getOpenFileName(
+                self, "Выберите программу для редактирования изображений"
+            )
+            if editor_path:
+                self.config.set_external_editor_path(editor_path)
+                QMessageBox.information(self, "Успех", f"Редактор установлен: {editor_path}")
+            else:
+                QMessageBox.information(self, "Информация", "Открытие во внешнем редакторе отменено")
+                return
+
+        # Проверяем существование файла редактора
+        if not os.path.exists(editor_path):
+            QMessageBox.critical(self, "Ошибка", f"Файл внешнего редактора не найден: {editor_path}")
+            return
+
+        # Открываем файл во внешнем редакторе
+        try:
+            import subprocess
+            subprocess.Popen([editor_path, image_path])
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось открыть файл во внешнем редакторе: {e}")
+
 
         
     def resizeEvent(self, event):
@@ -477,6 +569,10 @@ class PhotoViewerWindow(QWidget):
                 self.toggle_fullscreen()
             else:
                 self.close()
+        elif event.key() == Qt.Key.Key_F2:
+            self.rename_current_file()
+        elif event.key() == Qt.Key.Key_E:
+            self.open_in_external_editor()
         super().keyPressEvent(event)
                 
     def toggle_fullscreen(self):
