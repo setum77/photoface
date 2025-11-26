@@ -88,6 +88,14 @@ class DatabaseManager:
                     FOREIGN KEY (person_id) REFERENCES persons (id) ON DELETE CASCADE
                 )
             ''')
+            
+            # Таблица для настроек
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY NOT NULL,
+                    value TEXT
+                )
+            ''')
 
             conn.commit()
 
@@ -635,8 +643,24 @@ class DatabaseManager:
             cursor.execute("SELECT orig_width, orig_height FROM images WHERE id = ?", (image_id,))
             result = cursor.fetchone()
             return result if result else (0, 0)
-
-    # Диагностический метод 
+            
+    def update_image_path(self, old_path, new_path):
+        """Обновляет путь к изображению в базе данных"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            # Обновляем только имя файла, но оставляем полный путь
+            new_filename = os.path.basename(new_path)
+            cursor.execute('''
+                UPDATE images
+                SET file_path = ?, file_name = ?
+                WHERE file_path = ?
+            ''', (new_path, new_filename, old_path))
+            conn.commit()
+            updated_rows = cursor.rowcount
+            logger.debug(f"Обновлено {updated_rows} записей: {old_path} -> {new_path}")
+            return updated_rows > 0
+            
+    # Диагностический метод
     def debug_face_data(self, image_path):
         """Диагностика данных о лицах для изображения"""
         with self.get_connection() as conn:
@@ -662,3 +686,26 @@ class DatabaseManager:
                 print(f"  Размер bbox: {x2-x1:.1f}x{y2-y1:.1f}")
             
             return faces
+
+    # Методы для работы с настройками
+    def get_setting(self, key: str, default=None):
+        """Получает значение настройки по ключу"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+            result = cursor.fetchone()
+            return result[0] if result else default
+
+    def set_setting(self, key: str, value: str):
+        """Устанавливает значение настройки"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+            conn.commit()
+
+    def get_all_settings(self):
+        """Получает все настройки"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT key, value FROM settings")
+            return dict(cursor.fetchall())

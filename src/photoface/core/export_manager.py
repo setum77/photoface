@@ -171,19 +171,58 @@ class ExportTask(QRunnable):
         """Создает информационный файл для альбома"""
         try:
             info_content = f"""Альбом: {person_name}
-Дата создания: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-Одиночных фотографий: {single_count}
-Фотографий с друзьями: {group_count}
-Общее количество: {single_count + group_count}
-
-Создано программой Photo Face Manager
-"""
+ Дата создания: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+ Одиночных фотографий: {single_count}
+ Фотографий с друзьями: {group_count}
+ Общее количество: {single_count + group_count}
+ 
+ Создано программой Photo Face Manager
+ """
+            
+            # Добавляем информацию о фотографиях с друзьями
+            friends_path = os.path.join(album_path, "with_friends")
+            if os.path.exists(friends_path):
+                info_content += "\n\nФотографии с друзьями:\n"
+                for idx, filename in enumerate(sorted(os.listdir(friends_path)), 1):
+                    # Получаем информацию о всех персонах на фото из базы данных
+                    photo_path = os.path.join(friends_path, filename)
+                    # Ищем эту фотографию в базе данных, чтобы получить имена всех персон
+                    all_persons = self._get_all_persons_on_photo(photo_path)
+                    info_content += f"  {idx:03d}. {filename}: {all_persons}\n"
+            
             info_path = os.path.join(album_path, "info.txt")
             with open(info_path, 'w', encoding='utf-8') as f:
                 f.write(info_content)
                 
         except Exception as e:
             logger.error(f"Ошибка создания info файла: {e}")
+    
+    def _get_all_persons_on_photo(self, photo_path):
+        """Получает имена всех персон на фотографии из базы данных"""
+        try:
+            # Извлекаем имя файла из полного пути
+            filename = os.path.basename(photo_path)
+            
+            # Так как мы не можем получить все фотографии с несколькими лицами напрямую,
+            # нужно получить всех подтвержденных персон и проверить их группы
+            persons = self.db_manager.get_persons_with_albums()
+            
+            for person_id, person_name, _, _ in persons:
+                # Получаем фотографии с несколькими лицами для каждой персоны
+                group_photos = self.db_manager.get_photos_with_multiple_faces(person_id)
+                
+                for file_path, file_name, other_persons_str in group_photos:
+                    if os.path.basename(file_path) == filename or file_name == filename:
+                        # other_persons_str - это строка с именами, объединенными через запятую
+                        # добавляем текущую персону к списку, чтобы получить всех на фото
+                        other_persons_list = [name.strip() for name in other_persons_str.split(',') if name.strip()]
+                        all_persons = list(set(other_persons_list + [person_name]))  # объединяем и убираем дубликаты
+                        return ", ".join(sorted(all_persons)) if all_persons else "Нет персон"
+            
+            return "Информация недоступна"
+        except Exception as e:
+            logger.error(f"Ошибка получения информации о персонах на фото {photo_path}: {e}")
+            return "Ошибка получения информации"
 
 class ExportManager:
     """Менеджер экспорта для координации процессов"""

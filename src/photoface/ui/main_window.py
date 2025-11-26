@@ -14,7 +14,7 @@ class MainWindow(QMainWindow):
     def __init__(self, db_manager: DatabaseManager):
         super().__init__()
         self.db_manager = db_manager
-        self.config = Config()
+        self.config = Config(db_manager)
         self.photo_viewer = None
         self.init_ui()
         self.load_window_state()

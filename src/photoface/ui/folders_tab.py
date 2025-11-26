@@ -53,8 +53,8 @@ class FoldersTab(QWidget):
         self.cancel_scan_btn.clicked.connect(self.cancel_scanning)
         self.cancel_scan_btn.setEnabled(False)
         
-        self.editor_btn = QPushButton("Внешний редактор")
-        self.editor_btn.clicked.connect(self.set_external_editor)
+        self.editor_btn = QPushButton("Открыть в редакторе")
+        self.editor_btn.clicked.connect(self.open_in_external_editor)
 
         # Временная кнопка для очистки данных
         self.clear_btn = QPushButton("Очистить данные")
@@ -122,6 +122,13 @@ class FoldersTab(QWidget):
         self.thumbnails_view.setIconSize(QSize(120, 120))
         self.thumbnails_view.doubleClicked.connect(self.on_image_double_clicked)
         
+        # Контекстное меню для миниатюр
+        self.thumbnails_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.thumbnails_view.customContextMenuRequested.connect(self.show_thumbnail_context_menu)
+        
+        # Горячие клавиши для миниатюр
+        self.thumbnails_view.keyPressEvent = self.thumbnail_keyPressEvent
+        
         right_layout.addWidget(self.thumbnails_view)
         
         splitter.addWidget(self.right_panel)
@@ -139,6 +146,38 @@ class FoldersTab(QWidget):
 
         # Загружаем добавленные папки
         self.load_folders()
+        
+    def thumbnail_keyPressEvent(self, event):
+        """Обработка нажатия клавиш для миниатюр"""
+        if event.key() == Qt.Key.Key_F2:
+            # Переименование файла
+            selected_indexes = self.thumbnails_view.selectedIndexes()
+            if selected_indexes:
+                self.rename_image(selected_indexes[0])
+        elif event.key() == Qt.Key.Key_E:
+            # Редактирование файла
+            selected_indexes = self.thumbnails_view.selectedIndexes()
+            if selected_indexes:
+                self.open_image_in_editor(selected_indexes[0])
+        else:
+            # Вызываем стандартный обработчик для остальных клавиш
+            super(QListView, self.thumbnails_view).keyPressEvent(event)
+    
+    def show_thumbnail_context_menu(self, position):
+        """Показывает контекстное меню для миниатюры"""
+        index = self.thumbnails_view.indexAt(position)
+        if index.isValid():
+            menu = QMenu(self)
+            
+            rename_action = QAction("Переименовать", self)
+            rename_action.triggered.connect(lambda: self.rename_image(index))
+            menu.addAction(rename_action)
+            
+            open_editor_action = QAction("Открыть в редакторе", self)
+            open_editor_action.triggered.connect(lambda: self.open_image_in_editor(index))
+            menu.addAction(open_editor_action)
+            
+            menu.exec(self.thumbnails_view.viewport().mapToGlobal(position))
     
     def connect_signals(self):
         """Подключает сигналы сканирования"""
@@ -323,7 +362,7 @@ class FoldersTab(QWidget):
         """Отменяет текущее сканирование"""
         self.scan_manager.cancel_scan()
         self.on_scan_finished()
-        QMessageBox.information(self, "Информация", "Сканирование отменено")
+        # QMessageBox.information(self, "Информация", "Сканирование отменено")
 
     def update_scan_progress(self, current, total, filename):
         """Обновляет прогресс сканирования"""
@@ -345,12 +384,54 @@ class FoldersTab(QWidget):
         if self.current_folder_id:
             self.update_folder_stats(self.current_folder_id, self.current_folder)
         
-        QMessageBox.information(self, "Успех", "Сканирование завершено!")
+        # Показываем сообщение только при завершении реального сканирования
+        # QMessageBox.information(self, "Успех", "Сканирование завершено!")
 
     def on_scan_error(self, error_message):
         """Обрабатывает ошибки сканирования"""
         self.on_scan_finished()
         QMessageBox.critical(self, "Ошибка сканирования", f"Произошла ошибка: {error_message}")
+
+    def open_in_external_editor(self):
+        """Открывает выбранный файл во внешнем редакторе"""
+        # Получаем выделенный файл
+        selected_indexes = self.thumbnails_view.selectedIndexes()
+        if not selected_indexes:
+            QMessageBox.warning(self, "Внимание", "Выберите изображение для открытия")
+            return
+            
+        index = selected_indexes[0]
+        image_path = self.thumbnails_model.data(index, Qt.ItemDataRole.UserRole)
+        if not image_path:
+            QMessageBox.warning(self, "Внимание", "Не удалось получить путь к изображению")
+            return
+        
+        # Получаем путь к внешнему редактору из настроек
+        editor_path = self.config.get_external_editor_path()
+        
+        if not editor_path:
+            # Если редактор не задан, предлагаем пользователю его указать
+            editor_path, _ = QFileDialog.getOpenFileName(
+                self, "Выберите программу для редактирования изображений"
+            )
+            if editor_path:
+                self.config.set_external_editor_path(editor_path)
+                QMessageBox.information(self, "Успех", f"Редактор установлен: {editor_path}")
+            else:
+                QMessageBox.information(self, "Информация", "Открытие во внешнем редакторе отменено")
+                return
+        
+        # Проверяем существование файла редактора
+        if not os.path.exists(editor_path):
+            QMessageBox.critical(self, "Ошибка", f"Файл внешнего редактора не найден: {editor_path}")
+            return
+            
+        # Открываем файл во внешнем редакторе
+        try:
+            import subprocess
+            subprocess.Popen([editor_path, image_path])
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось открыть файл во внешнем редакторе: {e}")
 
     def set_external_editor(self):
         """Устанавливает внешний редактор изображений"""
@@ -358,7 +439,88 @@ class FoldersTab(QWidget):
             self, "Выберите программу для редактирования изображений"
         )
         if editor_path:
+            self.config.set_external_editor_path(editor_path)
             QMessageBox.information(self, "Успех", f"Редактор установлен: {editor_path}")
+
+    def rename_image(self, index):
+        """Переименовывает изображение"""
+        import os
+        from PyQt6.QtWidgets import QInputDialog
+        
+        image_path = self.thumbnails_model.data(index, Qt.ItemDataRole.UserRole)
+        if not image_path:
+            QMessageBox.warning(self, "Ошибка", "Не удалось получить путь к изображению")
+            return
+            
+        directory = os.path.dirname(image_path)
+        old_filename = os.path.basename(image_path)
+        name, ext = os.path.splitext(old_filename)
+        
+        new_name, ok = QInputDialog.getText(
+            self,
+            "Переименовать файл",
+            "Введите новое имя файла:",
+            text=name
+        )
+        
+        if ok and new_name.strip():
+            new_filename = new_name.strip() + ext
+            new_path = os.path.join(directory, new_filename)
+            
+            # Проверяем, существует ли уже файл с таким именем
+            if os.path.exists(new_path):
+                QMessageBox.warning(self, "Ошибка", f"Файл {new_filename} уже существует")
+                return
+                
+            try:
+                os.rename(image_path, new_path)
+                
+                # Обновляем данные в модели
+                item = self.thumbnails_model.item(index.row())
+                if item:
+                    item.setText(new_filename)
+                    item.setData(new_path, Qt.ItemDataRole.UserRole)
+                
+                # Обновляем путь к файлу в базе данных
+                self.db_manager.update_image_path(image_path, new_path)
+                
+                # QMessageBox.information(self, "Успех", "Файл успешно переименован")
+            except OSError as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось переименовать файл: {e}")
+
+    def open_image_in_editor(self, index):
+        """Открывает изображение во внешнем редакторе"""
+        image_path = self.thumbnails_model.data(index, Qt.ItemDataRole.UserRole)
+        if not image_path:
+            QMessageBox.warning(self, "Ошибка", "Не удалось получить путь к изображению")
+            return
+        
+        # Получаем путь к внешнему редактору из настроек
+        editor_path = self.config.get_external_editor_path()
+        
+        if not editor_path:
+            # Если редактор не задан, предлагаем пользователю его указать
+            editor_path, _ = QFileDialog.getOpenFileName(
+                self, "Выберите программу для редактирования изображений"
+            )
+            if editor_path:
+                self.config.set_external_editor_path(editor_path)
+                QMessageBox.information(self, "Успех", f"Редактор установлен: {editor_path}")
+            else:
+                QMessageBox.information(self, "Информация", "Открытие во внешнем редакторе отменено")
+                return
+        
+        # Проверяем существование файла редактора
+        if not os.path.exists(editor_path):
+            QMessageBox.critical(self, "Ошибка", f"Файл внешнего редактора не найден: {editor_path}")
+            return
+            
+        # Открываем файл во внешнем редакторе
+        try:
+            import subprocess
+            subprocess.Popen([editor_path, image_path])
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось открыть файл во внешнем редакторе: {e}")
 
     def clear_data(self):
         """Очищает все обработанные данные"""
