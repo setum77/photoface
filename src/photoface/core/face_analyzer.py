@@ -97,20 +97,62 @@ class FaceAnalyzer:
                     logger.warning(f"Некорректный формат bbox: {bbox}")
                     continue
                 
-                # Убедимся, что координаты в пределах изображения
+                # Первый clamp: в пределах изображения
                 x1 = max(0, float(x1))
                 y1 = max(0, float(y1))
                 x2 = min(width, float(x2))
                 y2 = min(height, float(y2))
                 
-                # Проверяем валидность bbox
+                # Проверяем базовую валидность
                 if x1 >= x2 or y1 >= y2:
                     logger.warning(f"Некорректный bbox: ({x1}, {y1}, {x2}, {y2})")
                     continue
                 
-                # Логируем для отладки
+                # === УЛУЧШЕНИЕ BBOX: расширение + fix aspect ===
+                w, h = x2 - x1, y2 - y1
+                expand = 0.2  # Расширение на 20% со всех сторон
+                x1 -= w * expand / 2
+                y1 -= h * expand / 2
+                x2 += w * expand / 2
+                y2 += h * expand / 2
+                
+                # Clamp после расширения
+                x1 = max(0, x1)
+                y1 = max(0, y1)
+                x2 = min(width, x2)
+                y2 = min(height, y2)
+                
+                # Fix aspect ratio для лиц (h/w ~1.3-1.6)
+                if w > 0 and h > 0:
+                    curr_aspect = h / w  # height/width
+                    target_aspect = 1.4  # Идеальное соотношение для лица
+                    
+                    if curr_aspect > 1.8:  # Слишком вертикальное (вытянуто вниз/вверх)
+                        new_h = w * target_aspect
+                        center_y = (y1 + y2) / 2
+                        y1 = center_y - new_h / 2
+                        y2 = center_y + new_h / 2
+                    elif curr_aspect < 0.8:  # Слишком горизонтальное
+                        new_w = h / target_aspect
+                        center_x = (x1 + x2) / 2
+                        x1 = center_x - new_w / 2
+                        x2 = center_x + new_w / 2
+                    
+                    # Финальный clamp после aspect fix
+                    x1 = max(0, x1)
+                    y1 = max(0, y1)
+                    x2 = min(width, x2)
+                    y2 = min(height, y2)
+                
+                # Финальная проверка
+                if x1 >= x2 or y1 >= y2:
+                    logger.warning(f"Некорректный bbox после улучшения: ({x1:.1f}, {y1:.1f}, {x2:.1f}, {y2:.1f})")
+                    continue
+                
+                # Логируем улучшенный bbox
                 logger.debug(f"Лицо {i+1}: bbox=({x1:.1f}, {y1:.1f}, {x2:.1f}, {y2:.1f}), "
-                            f"размер=({x2-x1:.1f}x{y2-y1:.1f}), confidence={face.det_score:.3f}")
+                            f"размер=({x2-x1:.1f}x{y2-y1:.1f}) [улучшено: expand+aspect], "
+                            f"confidence={face.det_score:.3f}")
                 
                 results.append({
                     'bbox': (x1, y1, x2, y2),

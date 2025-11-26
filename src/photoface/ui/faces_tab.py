@@ -14,9 +14,9 @@ from src.photoface.utils.helpers import generate_thumbnail, pil_to_pixmap
 class FaceThumbnailWidget(QFrame):
     """Виджет для отображения миниатюры лица с кнопками действий"""
     
-    face_confirmed = pyqtSignal(int)  # face_id
+    face_confirmed = pyqtSignal(int) # face_id
     face_rejected = pyqtSignal(int)   # face_id
-    face_double_clicked = pyqtSignal(str)  # image_path
+    face_double_clicked = pyqtSignal(str) # image_path
     
     def __init__(self, face_id, image_path, bbox, confidence, is_person_confirmed=False, parent=None):
         super().__init__(parent)
@@ -46,8 +46,8 @@ class FaceThumbnailWidget(QFrame):
         
         self.confirm_btn = QToolButton()
         self.confirm_btn.setFixedSize(24, 24)
-																	  
-											 
+																		  
+												 
         self.confirm_btn.clicked.connect(lambda: self.face_confirmed.emit(self.face_id))
         
         self.reject_btn = QToolButton()
@@ -146,7 +146,7 @@ class PersonNameDialog(QDialog):
         super().__init__(parent)
         self.db_manager = db_manager
         self.current_person_id = current_person_id
-        self.persons = []  # Список всех персон для фильтрации
+        self.persons = [] # Список всех персон для фильтрации
         self.target_id = None
         self.setWindowTitle("Переименовать персону")
         self.setModal(True)
@@ -240,14 +240,18 @@ class FacesTab(QWidget):
         
         self.refresh_btn = QPushButton("Обновить")
         self.refresh_btn.clicked.connect(self.refresh_data)
-        
+                
+        self.delete_empty_persons_btn = QPushButton("Удалить персоны без фото")
+        self.delete_empty_persons_btn.clicked.connect(self.delete_empty_persons)
+                
         self.stats_label = QLabel("Загрузка...")
-        
+                
         toolbar_layout.addWidget(self.cluster_btn)
         toolbar_layout.addWidget(self.refresh_btn)
+        toolbar_layout.addWidget(self.delete_empty_persons_btn)
         toolbar_layout.addWidget(self.stats_label)
         toolbar_layout.addStretch()
-        
+                
         layout.addLayout(toolbar_layout)
         
         # Основной разделитель
@@ -309,7 +313,25 @@ class FacesTab(QWidget):
         self.persons_model.clear()
         persons = self.db_manager.get_person_stats()
         
+        # Разделяем подтвержденные и неподтвержденные персоны
+        confirmed_persons = []
+        unconfirmed_persons = []
+        
         for person_id, name, is_confirmed, face_count in persons:
+            if is_confirmed:
+                confirmed_persons.append((person_id, name, is_confirmed, face_count))
+            else:
+                unconfirmed_persons.append((person_id, name, is_confirmed, face_count))
+        
+        # Сортируем подтвержденные персоны по алфавиту
+        confirmed_persons.sort(key=lambda x: x[1].lower())  # Сортировка по имени (x[1])
+        # Неподтвержденные персоны оставляем в исходном порядке или можно тоже отсортировать по алфавиту
+        unconfirmed_persons.sort(key=lambda x: x[1].lower())  # Сортировка по имени (x[1])
+        
+        # Объединяем списки: сначала подтвержденные (отсортированные), затем неподтвержденные (отсортированные)
+        sorted_persons = confirmed_persons + unconfirmed_persons
+        
+        for person_id, name, is_confirmed, face_count in sorted_persons:
             display_name = f"{name} ({face_count})"
             if not is_confirmed:
                 display_name = f"* {display_name}"
@@ -508,7 +530,7 @@ class FacesTab(QWidget):
             if not_recognized_id:
                 # Перемещаем все лица
                 faces = self.db_manager.get_person_faces(person_id)
-                for face_id, _, _, _, _, _, _, _ in faces:
+                for face_id, _, _, _, _, _, _ in faces:
                     self.db_manager.move_face_to_person(face_id, not_recognized_id)
                 
                 # Удаляем пустую персону
@@ -519,6 +541,44 @@ class FacesTab(QWidget):
                 
                 self.refresh_data()
                 self.needs_refresh.emit()
+                
+    def delete_empty_persons(self):
+        """Удаляет персоны без фотографий"""
+        reply = QMessageBox.question(
+            self, "Подтверждение",
+            "Удалить все персоны без фотографий?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            # Получаем список всех персон
+            persons = self.db_manager.get_person_stats()
+            empty_persons = [person_id for person_id, name, is_confirmed, face_count in persons if face_count == 0]
+            
+            if not empty_persons:
+                QMessageBox.information(self, "Информация", "Нет персон без фотографий для удаления")
+                return
+                
+            # Удаляем персоны без фотографий
+            deleted_count = 0
+            for person_id in empty_persons:
+                # Перемещаем в not recognized всех, кто может быть у этой персоны
+                faces = self.db_manager.get_person_faces(person_id)
+                for face_id, _, _, _, _, _, _ in faces:
+                    not_recognized_id = self.db_manager.get_person_by_name('not recognized')
+                    if not_recognized_id:
+                        self.db_manager.move_face_to_person(face_id, not_recognized_id)
+                
+                # Удаляем пустую персону
+                with self.db_manager.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM persons WHERE id = ?", (person_id,))
+                    conn.commit()
+                    deleted_count += 1
+            
+            QMessageBox.information(self, "Успех", f"Удалено {deleted_count} персон без фотографий")
+            self.refresh_data()
+            self.needs_refresh.emit()
                 
     def cluster_faces(self):
         """Выполняет кластеризацию нераспознанных лиц"""

@@ -2,34 +2,46 @@ import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGraphicsView, QGraphicsScene,
     QGraphicsPixmapItem, QLineEdit, QDialog, QDialogButtonBox, QMessageBox, QMenu,
+    QListWidget, QListWidgetItem
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QTimer, QPointF
 from PyQt6.QtGui import (
-    QPixmap, QPainter, QPen, QColor, QFont, QMouseEvent, QKeyEvent, QAction,
+    QPixmap, QPainter, QPen, QColor, QFont, QMouseEvent, QKeyEvent, QAction, QCursor,
 )
 from PIL import Image
 from tkinter import filedialog  # Для совместимости, но не используется в PyQt
 import traceback
 
 class FaceEditDialog(QDialog):
-    """Диалог для редактирования имени лица"""
+    """Диалог для редактирования имени лица с автодополнением"""
     
-    def __init__(self, current_name="", parent=None):
+    def __init__(self, current_name="", db_manager=None, parent=None):
         super().__init__(parent)
+        self.db_manager = db_manager
+        self.persons = []  # Список всех персон для фильтрации
         self.setWindowTitle("Изменить имя лица")
         self.setModal(True)
-        self.setFixedSize(300, 120)
+        self.setFixedSize(300, 220)
         self.init_ui(current_name)
         
     def init_ui(self, current_name):
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Имя человека:"))
+        
+        layout.addWidget(QLabel("Введите имя персоны или выберите из списка:"))
         
         self.name_edit = QLineEdit()
         self.name_edit.setText(current_name or "")
         self.name_edit.selectAll()
+        self.name_edit.textChanged.connect(self.filter_suggestions)
         self.name_edit.returnPressed.connect(self.accept)
         layout.addWidget(self.name_edit)
+        
+        # Список предложений
+        layout.addWidget(QLabel("Подходящие персоны:"))
+        self.suggestions_list = QListWidget()
+        self.suggestions_list.setMaximumHeight(100)
+        self.suggestions_list.itemDoubleClicked.connect(self.on_suggestion_double_clicked)
+        layout.addWidget(self.suggestions_list)
         
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -38,6 +50,32 @@ class FaceEditDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         
+        # Загружаем персон и фильтруем сразу
+        if self.db_manager:
+            self.persons = self.db_manager.get_person_stats()
+            self.filter_suggestions()
+            
+    def filter_suggestions(self):
+        """Фильтрует список по введённому тексту"""
+        if not self.persons:
+            return
+            
+        query = self.name_edit.text().lower().strip()
+        self.suggestions_list.clear()
+            
+        for person_id, name, is_confirmed, face_count in self.persons:
+            if (is_confirmed and query in name.lower() and name.lower() != 'not recognized'):
+                
+                display_text = f"{name} ({face_count} фото)"
+                item = QListWidgetItem(display_text)
+                item.setData(Qt.ItemDataRole.UserRole, person_id)
+                self.suggestions_list.addItem(item)
+                
+    def on_suggestion_double_clicked(self, item):
+        """Устанавливает выбранное имя и закрывает диалог"""
+        self.name_edit.setText(item.text().split(' (')[0])
+        self.accept()
+                
     def get_name(self):
         return self.name_edit.text().strip()
 
@@ -45,9 +83,9 @@ class FaceRectangle:
     """Представление рамки лица в scene coordinates"""
     
     def __init__(self, face_id, bbox, person_name, confidence):
-        # bbox: (x1, y1, x2, y2) в оригинальных пикселях
+        # bbox: (x1, y1, x2, y2) в логических пикселях
         self.face_id = face_id
-        self.scene_rect = QRectF(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[2] - bbox[1])
+        self.scene_rect = QRectF(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1])
         self.person_name = person_name or "Unknown"
         self.confidence = confidence
         self.is_hovered = False
@@ -141,6 +179,23 @@ class PhotoViewer(QGraphicsView):
         self.current_image_path = None
         self.face_rectangles = []
         self._init_ui()
+        # Создаем курсор зеленого цвета для отображения при наведении на области лиц
+        self.green_cursor = self._create_green_cursor()
+        
+    def _create_green_cursor(self):
+        """Создает курсор зеленого цвета"""
+        # Создаем пиксмап размером 24x24 пикселя
+        pixmap = QPixmap(24, 24)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        
+        # Рисуем зеленый крестик
+        painter = QPainter(pixmap)
+        painter.setPen(QPen(QColor(0, 255, 0), 2))
+        painter.drawLine(0, 12, 24, 12)  # Горизонтальная линия
+        painter.drawLine(12, 0, 12, 24)  # Вертикальная линия
+        painter.end()
+        
+        return QCursor(pixmap)
         
     def _init_ui(self):
         self.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
@@ -154,7 +209,6 @@ class PhotoViewer(QGraphicsView):
         
         self.setMouseTracking(True)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
-        print("Viewer DPR:", self.devicePixelRatioF())  # Test
         
     def load_image(self, image_path):
         """Загружает изображение и лица"""
@@ -163,23 +217,54 @@ class PhotoViewer(QGraphicsView):
             return False
             
         pixmap = QPixmap(image_path)
+        
+        physical_w, physical_h = pixmap.width(), pixmap.height()
+        
         dpr = self.devicePixelRatioF()  # HiDPI factor
+        self.dpr = dpr
+        
+        # Устанавливаем DPR для pixmap
         pixmap.setDevicePixelRatio(dpr)
-        print(f"Pixmap logical size: {pixmap.width()}x{pixmap.height()} DPR: {dpr}")
         if pixmap.isNull():
             QMessageBox.warning(self, "Ошибка", "Не удалось загрузить изображение")
             return False
             
         self.current_image_path = image_path
         self.pixmap_item.setPixmap(pixmap)
-        self.scene.setSceneRect(QRectF(pixmap.rect()))
-        # self.scene.setSceneRect(QRectF(0, 0, pixmap.widthF(), pixmap.heightF()))
+        # Устанавливаем размер scene в соответствии с размером pixmap
+        scene_rect = QRectF(0, 0, pixmap.width(), pixmap.height())
+        self.scene.setSceneRect(scene_rect)
+        
+        # Устанавливаем изображение в центр scene
+        self.pixmap_item.setPos(0, 0)
+        
+        # Устанавливаем политику масштабирования для центрирования изображения
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        
+        
         
         self.face_rectangles.clear()
         self.load_face_data(image_path)
         
-        self.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        # Устанавливаем политику выравнивания перед масштабированием
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Масштабируем изображение для отображения, чтобы оно помещалось в вид
+        self.fitInView(self.pixmap_item.boundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        # Дополнительно центрируем изображение в виду
+        self.centerOn(self.pixmap_item.boundingRect().center())
+        
+        # После загрузки изображения и масштабирования обновляем отображение
+        QTimer.singleShot(100, self._update_face_rectangles_after_scaling)
+        
         return True
+
+    def _update_face_rectangles_after_scaling(self):
+        """Обновляет отображение после масштабирования изображения"""
+        # Просто обновляем отображение, координаты в scene остаются теми же
+        # потому что координаты изображения и лиц хранятся в системе координат scene
+        self.viewport().update()
+        
         
     def load_face_data(self, image_path):
         """Загружает лица из БД"""
@@ -192,31 +277,35 @@ class PhotoViewer(QGraphicsView):
                 cursor.execute("SELECT id FROM images WHERE file_path = ?", (image_path,))
                 img_row = cursor.fetchone()
                 if not img_row:
-                    print(f"Изображение {image_path} не в БД")
                     return
                 image_id = img_row[0]
                 
                 # Лица (bbox уже absolute!)
                 cursor.execute("""
-                    SELECT f.id, f.bbox_x1, f.bbox_y1, f.bbox_x2, f.bbox_y2, 
+                    SELECT f.id, f.bbox_x1, f.bbox_y1, f.bbox_x2, f.bbox_y2,
                         f.confidence, COALESCE(p.name, 'Unknown')
                     FROM faces f LEFT JOIN persons p ON f.person_id = p.id
                     WHERE f.image_id = ?
                 """, (image_id,))
                 
                 faces_data = cursor.fetchall()
-                print(f"Найдено лиц для {image_path}: {len(faces_data)}")
                 
                 for face_id, x1, y1, x2, y2, conf, name in faces_data:
-                    bbox = (x1, y1, x2, y2)  # Уже absolute pixels!
-                    print(f"  Лицо {face_id}: bbox({x1:.0f},{y1:.0f},{x2:.0f},{y2:.0f}) size({x2-x1:.0f}x{y2-y1:.0f})")
+                    # Убираем деление на dpr, так как координаты из базы данных уже в логических пикселях
+                    bbox = (x1, y1, x2, y2)
                     
-                    self.face_rectangles.append(FaceRectangle(face_id, bbox, name, conf))
+                    face_rect = FaceRectangle(face_id, bbox, name, conf)
+                    self.face_rectangles.append(face_rect)
                     
         except Exception as e:
-            print(f"Ошибка load_face_data {image_path}: {e}")
             traceback.print_exc()
-    
+
+    def resizeEvent(self, event):
+        """Обработка изменения размера виджета"""
+        super().resizeEvent(event)
+        # Обновляем отображение при изменении размера
+        self.viewport().update()
+
     def drawForeground(self, painter, rect):
         """Рисует оверлей рамок"""
         if not self.face_rectangles:
@@ -228,7 +317,12 @@ class PhotoViewer(QGraphicsView):
         
     def mouseMoveEvent(self, event):
         """Наведение на рамки"""
-        scene_pos = self.mapToScene(event.pos())
+        # Получаем позицию мыши в координатах viewport
+        viewport_pos = event.pos()
+        
+        # Преобразуем в scene координаты
+        scene_pos = self.mapToScene(viewport_pos)
+        
         hovered = False
         for face_rect in self.face_rectangles:
             was_hovered = face_rect.is_hovered
@@ -237,10 +331,14 @@ class PhotoViewer(QGraphicsView):
                 hovered = True
             if face_rect.is_hovered != was_hovered:
                 self.viewport().update()
-                # self.viewport().update(self.mapToScene(event.pos()).boundingRect().adjusted(-50, -50, 50, 50))  # Локальный redraw
+                # self.viewport().update(self.mapToScene(event.pos()).boundingRect().adjusted(-50, -50, 50))  # Локальный redraw
                 
         # self.setCursor(Qt.PointingHandCursor if hovered else Qt.ArrowCursor)
-        self.setCursor(Qt.CursorShape.PointingHandCursor if hovered else Qt.CursorShape.ArrowCursor)
+        if hovered:
+            # Устанавливаем зеленый курсор при наведении на область лица
+            self.setCursor(self.green_cursor)
+        else:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
         super().mouseMoveEvent(event)
         
     def mousePressEvent(self, event):
@@ -270,9 +368,9 @@ class PhotoViewer(QGraphicsView):
         super().keyPressEvent(event)
         
     def edit_face_name(self, face_rect):
-        dialog = FaceEditDialog(face_rect.person_name, self)
+        dialog = FaceEditDialog(face_rect.person_name, self.db_manager, self)
         # if dialog.exec() == QDialog.Accepted:
-        if dialog.exec() == QDialog.DialogCode.Accepted:    
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             new_name = dialog.get_name()
             if new_name and new_name != face_rect.person_name:
                 if self._update_face_name(face_rect.face_id, new_name):
