@@ -115,7 +115,6 @@ class FaceOverlayWidget(QLabel):
         scaled_y = int(y * factor)
         scaled_w = int(w * factor)
         scaled_h = int(h * factor)
-        print(f"[DEBUG] FaceOverlayWidget.set_scale_factor: factor={factor}, bbox={self.bbox}, scaled=({scaled_x}, {scaled_y}, {scaled_w}, {scaled_h})")
         self.setGeometry(scaled_x, scaled_y, scaled_w, scaled_h)
         
     def paintEvent(self, event):
@@ -228,7 +227,7 @@ class PhotoViewer(QWidget):
         self.central_layout.addWidget(self.image_label)
         
         # Создаем overlay для рамок лиц
-        self.overlay_widget = QWidget(self.image_label)
+        self.overlay_widget = QWidget(self.central_widget) # Изменяем родителя на центральный виджет
         self.overlay_widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
         self.overlay_widget.setStyleSheet("background-color: rgba(0, 0, 0, 0);")
         self.overlay_widget.hide()
@@ -240,9 +239,12 @@ class PhotoViewer(QWidget):
         self.scroll_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.scroll_area.setFrameStyle(QFrame.Shape.NoFrame)
         
-        # Подключаем обработчик прокрутки
+        # Подключаем обработчик прокрутки изменение размера области просмотра
         self.scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
         self.scroll_area.horizontalScrollBar().valueChanged.connect(self._on_scroll_changed)
+        
+        # Также отслеживаем изменения размера viewport для обновления оверлея
+        self.scroll_area.viewport().installEventFilter(self)
         
         layout.addWidget(self.scroll_area)
         
@@ -271,8 +273,6 @@ class PhotoViewer(QWidget):
         self.original_pixmap = pixmap
         self.scale_factor = 1.0
         
-        print(f"[DEBUG] load_image: original pixmap size = {pixmap.size()}")
-        
         # Загружаем данные о лицах
         self.load_face_data(image_path)
         
@@ -282,16 +282,14 @@ class PhotoViewer(QWidget):
         # Создаем оверлеи для лиц
         self._create_face_overlays()
         
-        # Подгоняем изображение под размер окна
-        QTimer.singleShot(100, self.fit_to_window)
+        # Подгоняем изображение под размер окна с задержкой, чтобы избежать конфликта с первоначальной отрисовкой
+        QTimer.singleShot(150, self.fit_to_window)
         
         return True
 
     def _update_display(self):
         """Обновляет отображение изображения с учетом масштаба"""
         if self.original_pixmap and not self.original_pixmap.isNull():
-            print(f"[DEBUG] _update_display: original size = {self.original_pixmap.size()}, scale_factor = {self.scale_factor}")
-            
             # Масштабируем изображение
             scaled_size = self.original_pixmap.size() * self.scale_factor
             self.scaled_pixmap = self.original_pixmap.scaled(
@@ -299,8 +297,6 @@ class PhotoViewer(QWidget):
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation
             )
-            
-            print(f"[DEBUG] _update_display: scaled size = {self.scaled_pixmap.size()}")
             
             # Устанавливаем изображение в label
             self.image_label.setPixmap(self.scaled_pixmap)
@@ -314,25 +310,29 @@ class PhotoViewer(QWidget):
     def _update_overlay_geometry(self):
         """Обновляет геометрию оверлея"""
         if self.scaled_pixmap:
-            print(f"[DEBUG] _update_overlay_geometry: overlay size = {self.scaled_pixmap.size()}")
-            
             # Устанавливаем размер оверлея равным размеру изображения
             self.overlay_widget.resize(self.scaled_pixmap.size())
             
-            # Так как оверлей является дочерним для image_label,
-            # и image_label отображает изображение, оверлей должен быть
-            # размером с изображение и в позиции (0, 0) относительно image_label
-            self.overlay_widget.move(0, 0)
+            # Вычисляем позицию изображения виджете для центрирования оверлея
+            # Получаем размеры области прокрутки
+            viewport_size = self.scroll_area.viewport().size()
+            image_size = self.scaled_pixmap.size()
             
-            print(f"[DEBUG] _update_overlay_geometry: moved overlay to (0, 0) relative to image_label")
+            # Вычисляем смещения для центрирования
+            x_offset = max(0, (viewport_size.width() - image_size.width()) // 2)
+            y_offset = max(0, (viewport_size.height() - image_size.height()) // 2)
             
+            # Позиционируем оверлей с учетом смещения для центрирования
+            self.overlay_widget.move(x_offset, y_offset)
             self.overlay_widget.show()
         else:
             self.overlay_widget.hide()
+            
+        # Обновляем масштаб оверлеев после обновления геометрии
+        self._update_face_overlay_scales()
 
     def _update_face_overlay_scales(self):
         """Обновляет масштаб всех оверлеев лиц"""
-        print(f"[DEBUG] _update_face_overlay_scales: scale_factor = {self.scale_factor}, number of overlays = {len(self.face_overlays)}")
         for overlay in self.face_overlays.values():
             overlay.set_scale_factor(self.scale_factor)
 
@@ -360,16 +360,12 @@ class PhotoViewer(QWidget):
                 
                 faces_data = cursor.fetchall()
                 
-                print(f"[DEBUG] load_face_data: found {len(faces_data)} faces for image {image_path}")
-                
                 for face_id, x1, y1, x2, y2, conf, name in faces_data:
                     # Вычисляем bbox как (x, y, width, height)
                     x = x1
                     y = y1
                     width = x2 - x1
                     height = y2 - y1
-                    
-                    print(f"[DEBUG] Face {face_id}: bbox=({x}, {y}, {width}, {height}), name={name}")
                     
                     self.face_data[face_id] = {
                         'bbox': (x, y, width, height),
@@ -382,7 +378,6 @@ class PhotoViewer(QWidget):
 
     def _create_face_overlays(self):
         """Создает оверлеи для отображения лиц"""
-        print(f"[DEBUG] _create_face_overlays: creating {len(self.face_data)} face overlays")
         
         # Удаляем существующие оверлеи
         for overlay in self.face_overlays.values():
@@ -395,8 +390,6 @@ class PhotoViewer(QWidget):
             person_name = face_info['person_name']
             confidence = face_info['confidence']
             
-            print(f"[DEBUG] Creating overlay for face {face_id}: original bbox={bbox}")
-            
             overlay = FaceOverlayWidget(
                 face_id, bbox, person_name, confidence, self.overlay_widget
             )
@@ -405,8 +398,6 @@ class PhotoViewer(QWidget):
             
         # Обновляем масштаб оверлеев
         self._update_face_overlay_scales()
-        
-        print(f"[DEBUG] _create_face_overlays: finished creating overlays, current scale factor = {self.scale_factor}")
 
     def resizeEvent(self, event):
         """Обработка изменения размера виджета"""
@@ -436,9 +427,15 @@ class PhotoViewer(QWidget):
             
         event.accept()
 
+    def eventFilter(self, obj, event):
+        """Фильтр событий для отслеживания изменений в scroll_area"""
+        if obj == self.scroll_area.viewport() and event.type() == event.Type.Resize:
+            # Обновляем оверлей при изменении размера области просмотра
+            QTimer.singleShot(10, self._update_overlay_geometry)
+        return super().eventFilter(obj, event)
+        
     def _on_scroll_changed(self, value):
         """Обработчик изменения прокрутки"""
-        print(f"[DEBUG] Scroll changed: {value}")
         # При прокрутке оверлей автоматически прокручивается вместе с родительским элементом
         # Нам не нужно обновлять его позицию, так как он дочерний для image_label
         pass  # Убираем обновление оверлея при прокрутке
@@ -503,11 +500,8 @@ class PhotoViewer(QWidget):
     def fit_to_window(self):
         """Подгоняет изображение под размер окна"""
         if self.original_pixmap:
-            print(f"[DEBUG] fit_to_window: original size = {self.original_pixmap.size()}")
-            
             # Получаем размер области просмотра
             available_size = self.scroll_area.viewport().size()
-            print(f"[DEBUG] fit_to_window: available size = {available_size}")
             
             # Учитываем отступы
             margin = 20
@@ -521,11 +515,8 @@ class PhotoViewer(QWidget):
             
             new_scale = min(width_ratio, height_ratio)
             
-            print(f"[DEBUG] fit_to_window: width_ratio={width_ratio}, height_ratio={height_ratio}, new_scale={new_scale}")
-            
             # Устанавливаем масштаб
             self.scale_factor = max(self.min_scale, min(new_scale, self.max_scale))
-            print(f"[DEBUG] fit_to_window: final scale_factor = {self.scale_factor}")
             self._update_display()
 
 
