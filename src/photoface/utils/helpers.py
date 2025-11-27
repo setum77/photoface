@@ -37,15 +37,16 @@ def pil_to_pixmap(pil_image):
     return QPixmap.fromImage(q_image)
 
 def get_image_files(folder_path):
-    """Возвращает список файлов изображений в папке"""
+    """Возвращает список файлов изображений в папке и всех подпапках"""
     image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'}
     image_files = []
     
-    for file in os.listdir(folder_path):
-        file_path = os.path.join(folder_path, file)
-        if os.path.isfile(file_path):
-            _, ext = os.path.splitext(file.lower())
-            if ext in image_extensions:
-                image_files.append(file_path)
+    for root, dirs, files in os.walk(folder_path):
+        for file in files:
+            file_path = os.path.join(root, file)
+            if os.path.isfile(file_path):
+                _, ext = os.path.splitext(file.lower())
+                if ext in image_extensions:
+                    image_files.append(file_path)
     
     return sorted(image_files)

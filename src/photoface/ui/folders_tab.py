@@ -221,11 +221,17 @@ class FoldersTab(QWidget):
             # Нормализуем путь
             folder_path = os.path.normpath(folder_path)
             
-            if self.db_manager.add_folder(folder_path):
+            # Рекурсивно добавляем все вложенные папки
+            added_count = 0
+            for root, dirs, files in os.walk(folder_path):
+                if self.db_manager.add_folder(root):
+                    added_count += 1
+            
+            if added_count > 0:
                 self.load_folders()
-                QMessageBox.information(self, "Успех", f"Папка добавлена: {folder_path}")
+                QMessageBox.information(self, "Успех", f"Добавлено {added_count} папок (включая вложенные): {folder_path}")
             else:
-                QMessageBox.warning(self, "Ошибка", "Папка уже добавлена или произошла ошибка")
+                QMessageBox.warning(self, "Ошибка", "Папки уже добавлены или произошла ошибка")
 
     def remove_selected_folder(self):
         """Удаляет выбранную папку из обработки"""
