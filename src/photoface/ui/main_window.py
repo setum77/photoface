@@ -103,6 +103,15 @@ class MainWindow(QMainWindow):
         # Здесь можно добавить логику применения настроек в реальном времени
         self.status_bar.showMessage("Настройки применены", 3000)
         
+        # Обновляем конфигурацию в scan_manager
+        if hasattr(self.folders_tab, 'scan_manager'):
+            self.folders_tab.scan_manager.update_config(self.config)
+            
+    def apply_config_changes(self):
+        """Применяет изменения конфигурации"""
+        # Здесь можно добавить логику применения настроек в реальном времени
+        self.status_bar.showMessage("Настройки применены", 3000)
+        
     def toggle_fullscreen(self):
         """Переключает полноэкранный режим"""
         if self.isFullScreen():

@@ -27,7 +27,8 @@ class Config:
             'scan': {
                 'similarity_threshold': 0.6,
                 'min_face_confidence': 0.7,
-                'auto_cluster_after_scan': True
+                'auto_cluster_after_scan': True,
+                'face_model_name': 'buffalo_l'  # Новая настройка для выбора модели
             },
             'export': {
                 'last_output_path': '',

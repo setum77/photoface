@@ -25,7 +25,7 @@ class FoldersTab(QWidget):
         super().__init__()
         self.db_manager = db_manager
         self.config = config
-        self.scan_manager = ScanManager(db_manager)
+        self.scan_manager = ScanManager(db_manager, config)
         self.current_folder = None
         self.current_folder_id = None
         self.init_ui()

@@ -193,15 +193,21 @@ class ScanTask(QRunnable):
 class ScanManager:
     """Менеджер сканирования для координации процессов"""
     
-    def __init__(self, db_manager):
+    def __init__(self, db_manager, config=None):
         self.db_manager = db_manager
-        self.face_analyzer = FaceAnalyzer()
+        self.config = config
+        self.face_analyzer = FaceAnalyzer(config)
         self.thread_pool = QThreadPool()
         self.current_task = None
         
         # Инициализируем модель распознавания
         if not self.face_analyzer.initialize():
             raise Exception("Не удалось инициализировать модель распознавания лиц")
+            
+    def update_config(self, config):
+        """Обновляет конфигурацию и перезапускает анализатор при необходимости"""
+        self.config = config
+        self.face_analyzer.config = config
 
     def start_scan(self, folder_id=None):
         """Начинает процесс сканирования"""

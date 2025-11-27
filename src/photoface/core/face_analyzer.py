@@ -9,9 +9,18 @@ import logging
 logger = logging.getLogger(__name__)
 
 class FaceAnalyzer:
-    def __init__(self):
+    def __init__(self, config=None):
         self.model = None
         self.initialized = False
+        self.config = config
+        
+    def _get_model_name_from_config(self):
+        """Получает имя модели из конфигурации"""
+        if self.config:
+            return self.config.get('scan.face_model_name', 'buffalo_l')
+        else:
+            # Если конфиг не передан, используем значение по умолчанию
+            return 'buffalo_l'
         
     def initialize(self):
         """Инициализация модели распознавания лиц"""
@@ -22,9 +31,14 @@ class FaceAnalyzer:
         try:
             logger.info("Инициализация модели распознавания лиц...")
             
+            # Получаем имя модели из настроек (по умолчанию buffalo_l)
+            model_name = self._get_model_name_from_config()
+            
+            logger.info(f"Используется модель: {model_name}")
+            
             # Создаем экземпляр FaceAnalysis
             self.model = FaceAnalysis(
-                name='buffalo_l',  # Модель по умолчанию
+                name=model_name,  # Используем выбранную модель
                 providers=['CPUExecutionProvider']  # Используем CPU для совместимости
             )
             

@@ -584,9 +584,10 @@ class AlbumsTab(QWidget):
         self.cancel_sync_btn.setEnabled(False)
         self.progress_dialog.hide()
         
+        # Показываем сообщение только если это не отмена синхронизации
         if success:
             QMessageBox.information(self, "Успех", message)
-        else:
+        elif message != "Синхронизация отменена":
             QMessageBox.warning(self, "Предупреждение", message)
             
         self.refresh_data()
