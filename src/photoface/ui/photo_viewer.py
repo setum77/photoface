@@ -340,39 +340,24 @@ class PhotoViewer(QWidget):
         """Загружает лица из БД"""
         self.face_data.clear()
         try:
-            with self.db_manager.get_connection() as conn:
-                cursor = conn.cursor()
+            # Используем существующий метод из DatabaseManager
+            faces_data = self.db_manager.get_image_faces(image_path)
+            
+            for face_id, x1, y1, x2, y2, conf, name, person_id, is_person_status in faces_data:
+                # Вычисляем bbox как (x, y, width, height)
+                x = x1
+                y = y1
+                width = x2 - x1
+                height = y2 - y1
                 
-                # Получаем image_id
-                cursor.execute("SELECT id FROM images WHERE file_path = ?", (image_path,))
-                img_row = cursor.fetchone()
-                if not img_row:
-                    return
-                image_id = img_row[0]
+                self.face_data[face_id] = {
+                    'bbox': (x, y, width, height),
+                    'person_name': name,
+                    'confidence': conf,
+                    'person_id': person_id,
+                    'is_person': is_person_status
+                }
                 
-                # Лица (bbox уже absolute!)
-                cursor.execute("""
-                    SELECT f.id, f.bbox_x1, f.bbox_y1, f.bbox_x2, f.bbox_y2,
-                        f.confidence, COALESCE(p.name, 'Unknown')
-                    FROM faces f LEFT JOIN persons p ON f.person_id = p.id
-                    WHERE f.image_id = ?
-                """, (image_id,))
-                
-                faces_data = cursor.fetchall()
-                
-                for face_id, x1, y1, x2, y2, conf, name in faces_data:
-                    # Вычисляем bbox как (x, y, width, height)
-                    x = x1
-                    y = y1
-                    width = x2 - x1
-                    height = y2 - y1
-                    
-                    self.face_data[face_id] = {
-                        'bbox': (x, y, width, height),
-                        'person_name': name,
-                        'confidence': conf
-                    }
-                    
         except Exception as e:
             traceback.print_exc()
 
@@ -475,17 +460,68 @@ class PhotoViewer(QWidget):
                 if self._update_face_name(face_id, new_name):
                     # Обновляем информацию о лице
                     face_info['person_name'] = new_name
+                    # Обновляем is_person статус после изменения
+                    face_info['is_person'] = 1 # Так как имя изменено, считаем, что лицо подтверждено
                     self.face_overlays[face_id].person_name = new_name
                     self.face_overlays[face_id].update()
                     self.face_name_changed.emit(face_id, new_name)
 
     def _update_face_name(self, face_id, new_name):
-        """Обновляет имя лица в базе данных"""
+        """Обновляет имя лица в базе данных с учетом специальных правил"""
         try:
-            person_id = self.db_manager.get_person_by_name(new_name)
-            if not person_id:
-                person_id = self.db_manager.create_person(new_name)
-            return person_id and self.db_manager.move_face_to_person(face_id, person_id)
+            # Получаем текущую информацию о лице из self.face_data
+            face_info = self.face_data.get(face_id)
+            if not face_info:
+                return False
+            
+            current_person_id = face_info['person_id']
+            current_person_name = face_info['person_name']
+            
+            if not current_person_id or not current_person_name:
+                return False
+            
+            # Проверяем, является ли новое имя существующей персоной
+            target_person_id = self.db_manager.get_person_by_name(new_name)
+            if target_person_id:
+                # Если выбрана уже существующая персона - просто перемещаем лицо
+                return self.db_manager.move_face_to_person(face_id, target_person_id)
+            
+            # Проверяем, является ли текущая персона "Person_(id)" (т.е. результат кластеризации)
+            import re
+            person_pattern = r'^Person_\d+$'
+            if re.match(person_pattern, current_person_name):
+                # Обновляем имя текущей персоны
+                if self.db_manager.update_person_name(current_person_id, new_name):
+                    # Подтверждаем персону
+                    self.db_manager.confirm_person(current_person_id)
+                    # Устанавливаем is_person = 1 для всех лиц этой персоны
+                    person_faces = self.db_manager.get_person_faces(current_person_id)
+                    for face_id_in_person, _, _, _, _, _, _, _, _ in person_faces:
+                        self.db_manager.set_face_person_status(face_id_in_person, 1)
+                    return True
+                return False
+            
+            # Если текущая персона "not recognized"
+            elif current_person_name == 'not recognized':
+                # Создаем новую персону
+                new_person_id = self.db_manager.create_person(new_name)
+                if new_person_id:
+                    # Перемещаем лицо в новую персону
+                    if self.db_manager.move_face_to_person(face_id, new_person_id):
+                        # Подтверждаем персону
+                        self.db_manager.confirm_person(new_person_id)
+                        # Устанавливаем is_person = 1 для этого лица
+                        self.db_manager.set_face_person_status(face_id, 1)
+                        return True
+                return False
+            
+            # В остальных случаях просто обновляем имя персоны
+            else:
+                person_id = self.db_manager.get_person_by_name(new_name)
+                if not person_id:
+                    person_id = self.db_manager.create_person(new_name)
+                return person_id and self.db_manager.move_face_to_person(face_id, person_id)
+                
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка обновления: {e}")
             return False
