@@ -1,5 +1,8 @@
 import os
 import logging
+import zipfile
+import tempfile
+import shutil
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -26,25 +29,25 @@ class ModelManager:
             'buffalo_s': {
                 'name': 'buffalo_s',
                 'description': 'Более быстрая, но менее точная модель',
-                'size_mb': 400,  # примерный размер
+                'size_mb': 360,  # примерный размер
                 'files': [
                     '1k3d68.onnx',
                     '2d106det.onnx',
-                    'det_10g.onnx',
+                    'det_500m.onnx',
                     'genderage.onnx',
-                    'w600k_r50.onnx'
+                    'w600k_mbf.onnx'
                 ]
             },
             'antelopev2': {
                 'name': 'antelopev2',
                 'description': 'Современная модель с улучшенной архитектурой',
-                'size_mb': 400,  # примерный размер
+                'size_mb': 130,  # примерный размер
                 'files': [
                     '1k3d68.onnx',
                     '2d106det.onnx',
-                    'det_10g.onnx',
+                    'glintr100.onnx',
                     'genderage.onnx',
-                    'w600k_r50.onnx'
+                    'scrfd_10g_bnkps.onnx'
                 ]
             }
         }
@@ -103,6 +106,75 @@ class ModelManager:
             updates[model_name] = not self.is_model_installed(model_name)
         return updates
     
+    def _extract_model_archive_properly(self, zip_path: Path, model_path: Path):
+        """Распаковка: если файлы - в папку с именем архива, если папка - как есть."""
+        archive_name = zip_path.stem  # имя архива без расширения
+        temp_dir = Path(tempfile.mkdtemp())
+        
+        logger.info(f"Распаковка архива {zip_path} во временную папку {temp_dir}")
+        
+        with zipfile.ZipFile(zip_path, 'r') as zipref:
+            zipref.extractall(temp_dir)
+        
+        # Получаем список содержимого временной папки
+        temp_contents = list(temp_dir.iterdir())
+        
+        if len(temp_contents) == 1 and temp_contents[0].is_dir():
+            # В архиве одна папка - распаковываем как есть
+            folder_name = temp_contents[0].name
+            logger.info(f"В архиве обнаружена папка: {folder_name}")
+            
+            # Создаем целевую папку, если не существует
+            model_path.mkdir(parents=True, exist_ok=True)
+            
+            # Копируем все содержимое из временной папки в целевую
+            for item in temp_contents[0].iterdir():
+                dest = model_path / item.name
+                if item.is_file():
+                    shutil.copy2(str(item), str(dest))
+                else:
+                    shutil.copytree(str(item), str(dest))
+            
+            logger.info(f"Содержимое папки {folder_name} скопировано в {model_path}")
+        else:
+            # В архиве файлы на корневом уровне - создаем папку с именем архива
+            logger.info("В архиве файлы на корневом уровне")
+            
+            # Создаем папку для модели
+            model_path.mkdir(parents=True, exist_ok=True)
+            
+            # Копируем все файлы и папки в целевую папку
+            for item in temp_contents:
+                dest = model_path / item.name
+                if item.is_file():
+                    shutil.copy2(str(item), str(dest))
+                else:
+                    shutil.copytree(str(item), str(dest))
+            
+            logger.info(f"Файлы распакованы в папку {model_path}")
+        
+        # Удаляем временную папку
+        shutil.rmtree(temp_dir)
+        logger.info(f"Распаковка завершена в {model_path}")
+    
+    def _fix_model_structure(self, model_path: Path, model_name: str):
+        """Финальная проверка и исправление структуры модели."""
+        model_info = self.available_models.get(model_name, {})
+        if 'files' not in model_info:
+            return
+        
+        for filename in model_info['files']:
+            expected_path = model_path / filename
+            if not expected_path.exists():
+                # Ищем в возможных вложенных папках
+                for subdir in model_path.iterdir():
+                    if subdir.is_dir():
+                        candidate = subdir / filename
+                        if candidate.exists():
+                            shutil.move(str(candidate), str(expected_path))
+                            logger.info(f"Перемещен {filename} из {subdir}")
+                            break
+    
     def download_model(self, model_name: str, progress_callback=None) -> bool:
         """Скачивает модель (вызывает InsightFace для загрузки)"""
         if model_name not in self.available_models:
@@ -113,27 +185,87 @@ class ModelManager:
             if progress_callback:
                 progress_callback(0, "Начинаем загрузку модели...")
             
+            # Проверим, существует ли архив модели для правильной распаковки
+            model_path = self.get_model_path(model_name)
+            zip_path = model_path.with_suffix('.zip')
+            
+            if zip_path.exists():
+                # Распакуем архив правильно
+                if progress_callback:
+                    progress_callback(20, f"Подготовка распаковки {model_name}...")
+                
+                self._extract_model_archive_properly(zip_path, model_path)
+                self._fix_model_structure(model_path, model_name)
+                
+                # После распаковки удалим архив, чтобы не мешал
+                try:
+                    os.remove(zip_path)
+                    logger.info(f"Архив {zip_path.name} удален после распаковки")
+                except Exception as e:
+                    logger.warning(f"Не удалось удалить архив {zip_path.name}: {e}")
+            
             import insightface
             from insightface.app import FaceAnalysis
             
-            # Создаем экземпляр FaceAnalysis с указанной моделью
-            # Это автоматически загрузит модель, если она отсутствует
             if progress_callback:
-                progress_callback(30, f"Инициализация модели {model_name}...")
+                progress_callback(50, f"Проверка файлов модели {model_name}...")
+            
+            # Проверим, что файлы модели действительно существуют
+            # Но НЕ будем возвращать ошибку, если файлы отсутствуют, т.к. InsightFace сам их скачает
+            model_info = self.available_models[model_name]
+            missing_files = []
+            
+            for file_name in model_info['files']:
+                file_path = model_path / file_name
+                if not file_path.exists():
+                    missing_files.append(file_name)
+            
+            if missing_files:
+                logger.info(f"Файлы модели {model_name} отсутствуют, будет выполнена загрузка: {missing_files}")
+            else:
+                logger.info(f"Файлы модели {model_name} уже присутствуют в локальной папке")
+            
+            # Также проверим, есть ли файлы в подпапке (на случай, если распаковка не сработала правильно)
+            if missing_files and model_path.exists():
+                for subdir in model_path.iterdir():
+                    if subdir.is_dir():
+                        for file_name in missing_files[:]:  # Копируем список для итерации
+                            nested_file_path = subdir / file_name
+                            original_file_path = model_path / file_name
+                            if nested_file_path.exists():
+                                # Переместим файл из вложенной папки в основную
+                                shutil.move(str(nested_file_path), str(original_file_path))
+                                logger.info(f"Файл {file_name} перемещен из вложенной папки в основную")
+                                # Уберем из списка отсутствующих
+                                missing_files.remove(file_name)
+            
+            if progress_callback:
+                progress_callback(70, f"Инициализация модели {model_name}...")
                 
+            # Пытаемся загрузить модель через InsightFace, который сам скачает при необходимости
             app = FaceAnalysis(name=model_name, providers=['CPUExecutionProvider'])
             
             if progress_callback:
-                progress_callback(60, f"Подготовка модели {model_name}...")
+                progress_callback(75, f"Загрузка модели {model_name} через InsightFace...")
                 
             app.prepare(ctx_id=0, det_size=(640, 640))
             
-            # Для antelopev2 может потребоваться дополнительная обработка
-            # из-за структуры папок в архиве
-            if model_name == 'antelopev2':
-                if progress_callback:
-                    progress_callback(80, "Корректировка структуры папок antelopev2...")
-                self.fix_antelope2_structure(model_name)
+            # После успешной загрузки проверим, какие файлы были скачаны и обновим статус
+            model_info = self.available_models[model_name]
+            downloaded_files = []
+            missing_files = []
+            
+            for file_name in model_info['files']:
+                file_path = model_path / file_name
+                if file_path.exists():
+                    downloaded_files.append(file_name)
+                else:
+                    missing_files.append(file_name)
+            
+            logger.info(f"Модель {model_name} - загружено файлов: {len(downloaded_files)}, отсутствует: {len(missing_files)}")
+            
+            if progress_callback:
+                progress_callback(80, f"Подготовка модели {model_name}...")
             
             if progress_callback:
                 progress_callback(100, f"Модель {model_name} успешно загружена!")
@@ -147,7 +279,7 @@ class ModelManager:
             logger.error(f"Ошибка при загрузке модели {model_name}: {e}")
             # Выводим более подробную информацию об ошибке
             import traceback
-            logger.error(f"Трессировка ошибки: {traceback.format_exc()}")
+            logger.error(f"Трассировка ошибки: {traceback.format_exc()}")
             return False
     
     def get_model_download_status(self, model_name: str) -> Tuple[bool, str]:
@@ -189,100 +321,4 @@ class ModelManager:
             
         except Exception as e:
             logger.error(f"Модель {model_name} не прошла проверку целостности: {e}")
-            return False
-    
-    # Метод fix_antelope2_structure больше не нужен, так как правильная распаковка
-    # теперь происходит при первоначальной загрузке модели
-    
-    def _extract_antelopev2_properly(self, zip_path, model_path):
-        """Правильно распаковывает архив antelopev2, избегая создания папки в папке"""
-        import zipfile
-        import tempfile
-        import shutil
-        
-        try:
-            # Создаем временный каталог для распаковки
-            with tempfile.TemporaryDirectory() as temp_dir:
-                # Распаковываем архив во временный каталог
-                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                    zip_ref.extractall(temp_dir)
-                
-                # Находим внутреннюю папку antelopev2 (если она есть)
-                temp_contents = list(Path(temp_dir).iterdir())
-                
-                # Если внутри один каталог с именем antelopev2, используем его содержимое
-                if len(temp_contents) == 1 and temp_contents[0].is_dir() and temp_contents[0].name == 'antelopev2':
-                    inner_folder = temp_contents[0]
-                    # Копируем содержимое внутренней папки в целевую папку
-                    for item in inner_folder.iterdir():
-                        dest_path = model_path / item.name
-                        if item.is_file():
-                            shutil.copy2(str(item), str(dest_path))
-                        else:
-                            shutil.copytree(str(item), str(dest_path))
-                else:
-                    # Если структура другая, копируем все содержимое
-                    for item in Path(temp_dir).iterdir():
-                        dest_path = model_path / item.name
-                        if item.is_file():
-                            shutil.copy2(str(item), str(dest_path))
-                        else:
-                            shutil.copytree(str(item), str(dest_path))
-                            
-            logger.info("Antelopev2 архив распакован корректно")
-        except Exception as e:
-            logger.error(f"Ошибка при распаковке antelopev2: {e}")
-            raise
-    
-    def download_model(self, model_name: str, progress_callback=None) -> bool:
-        """Скачивает модель (вызывает InsightFace для загрузки)"""
-        if model_name not in self.available_models:
-            logger.error(f"Модель {model_name} не поддерживается")
-            return False
-            
-        try:
-            if progress_callback:
-                progress_callback(0, "Начинаем загрузку модели...")
-            
-            # Для antelopev2 сначала проверим, нужно ли выполнить правильную распаковку
-            if model_name == 'antelopev2':
-                # Проверим, существует ли архив
-                import os
-                model_path = self.get_model_path(model_name)
-                zip_path = model_path.with_suffix('.zip')
-                
-                if zip_path.exists():
-                    # Распакуем архив правильно: содержимое из внутренней папки переместим в основную
-                    if progress_callback:
-                        progress_callback(20, "Подготовка распаковки antelopev2...")
-                    self._extract_antelopev2_properly(zip_path, model_path)
-            
-            import insightface
-            from insightface.app import FaceAnalysis
-            
-            if progress_callback:
-                progress_callback(40, f"Инициализация модели {model_name}...")
-                
-            # Создаем экземпляр FaceAnalysis с указанной моделью
-            # Это автоматически загрузит модель, если она отсутствует
-            app = FaceAnalysis(name=model_name, providers=['CPUExecutionProvider'])
-            
-            if progress_callback:
-                progress_callback(70, f"Подготовка модели {model_name}...")
-                
-            app.prepare(ctx_id=0, det_size=(640, 640))
-            
-            if progress_callback:
-                progress_callback(100, f"Модель {model_name} успешно загружена!")
-            
-            logger.info(f"Модель {model_name} успешно загружена и готова к использованию")
-            return True
-            
-        except Exception as e:
-            if progress_callback:
-                progress_callback(-1, f"Ошибка загрузки модели: {str(e)}")
-            logger.error(f"Ошибка при загрузке модели {model_name}: {e}")
-            # Выводим более подробную информацию об ошибке
-            import traceback
-            logger.error(f"Трессировка ошибки: {traceback.format_exc()}")
             return False
