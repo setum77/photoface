@@ -1,16 +1,17 @@
 import os
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGraphicsView, QGraphicsScene,
-    QGraphicsPixmapItem, QLineEdit, QDialog, QDialogButtonBox, QMessageBox, QMenu,
-    QListWidget, QListWidgetItem
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+    QLineEdit, QDialog, QDialogButtonBox, QMessageBox, QMenu,
+    QListWidget, QListWidgetItem, QFrame, QSizePolicy
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QTimer, QPointF
+from PyQt6.QtCore import Qt, pyqtSignal, QRect, QTimer, QPoint, QSize
 from PyQt6.QtGui import (
     QPixmap, QPainter, QPen, QColor, QFont, QMouseEvent, QKeyEvent, QAction, QCursor,
+    QPolygon
 )
 from PIL import Image
-from tkinter import filedialog  # Для совместимости, но не используется в PyQt
 import traceback
+
 
 class FaceEditDialog(QDialog):
     """Диалог для редактирования имени лица с автодополнением"""
@@ -79,94 +80,115 @@ class FaceEditDialog(QDialog):
     def get_name(self):
         return self.name_edit.text().strip()
 
-class FaceRectangle:
-    """Представление рамки лица в scene coordinates"""
+
+class FaceOverlayWidget(QLabel):
+    """Виджет для отображения рамки лица и кликабельной области"""
     
-    def __init__(self, face_id, bbox, person_name, confidence):
-        # bbox: (x1, y1, x2, y2) в логических пикселях
+    face_clicked = pyqtSignal(int) # face_id
+    
+    def __init__(self, face_id, bbox, person_name, confidence, parent=None):
+        super().__init__(parent)
         self.face_id = face_id
-        self.scene_rect = QRectF(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1])
+        self.bbox = bbox  # (x, y, width, height) в координатах изображения
         self.person_name = person_name or "Unknown"
         self.confidence = confidence
         self.is_hovered = False
+        self.is_selected = False
+        self.scale_factor = 1.0
         
-    def contains_scene_point(self, scene_pos):
-        """Проверка наведения/клика в scene coordinates"""
-        return self.scene_rect.contains(scene_pos)
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.setMinimumSize(1, 1)
         
-    def draw(self, painter, view):
-        """Рисует рамку в viewport coordinates"""
-        # viewport_rect = view.mapFromScene(self.scene_rect).boundingRect()
-        # scene_r = self.scene_rect.toRectF()
-        viewport_rect = view.mapFromScene(self.scene_rect).boundingRect()
-        # viewport_rect = view.mapFromScene(scene_r).boundingRect()
+        # Устанавливаем размер и позицию
+        x, y, w, h = self.bbox
+        self.setGeometry(int(x), int(y), int(w), int(h))
         
-        # Цвет: зеленый для известных, желтый для unknown
-        color = QColor(0, 255, 0) if self.person_name != "Unknown" else QColor(255, 255, 0)
+        # Устанавливаем стили
+        self.setStyleSheet("background-color: rgba(0, 0, 0, 0);")
+        
+    def set_scale_factor(self, factor):
+        """Обновляет масштабный фактор"""
+        self.scale_factor = factor
+        x, y, w, h = self.bbox
+        scaled_x = int(x * factor)
+        scaled_y = int(y * factor)
+        scaled_w = int(w * factor)
+        scaled_h = int(h * factor)
+        print(f"[DEBUG] FaceOverlayWidget.set_scale_factor: factor={factor}, bbox={self.bbox}, scaled=({scaled_x}, {scaled_y}, {scaled_w}, {scaled_h})")
+        self.setGeometry(scaled_x, scaled_y, scaled_w, scaled_h)
+        
+    def paintEvent(self, event):
+        """Рисует рамку и метку лица"""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Определяем цвет рамки
+        if self.person_name != "Unknown":
+            color = QColor(0, 255, 0)  # Зеленый для известных
+        else:
+            color = QColor(255, 255, 0)  # Желтый для неизвестных
+            
         if self.is_hovered:
             color = color.lighter(150)
+        elif self.is_selected:
+            color = QColor(0, 0, 255)  # Синий для выделенных
             
-        pen = QPen(color, max(2, 3))
+        # Рисуем рамку
+        pen = QPen(color, max(2, int(3 * self.scale_factor)))
         painter.setPen(pen)
-        painter.drawRect(viewport_rect)
+        painter.drawRect(0, 0, self.width(), self.height())
         
-        # Текст только при достаточном масштабе
-        if view.transform().m11() > 0.5:
-            self._draw_label(painter, view, viewport_rect)
+        # Рисуем метку только если рамка достаточно большая
+        if self.width() > 30 and self.height() > 20:
+            self._draw_label(painter)
     
-    # def _draw_label(self, painter, view, viewport_rect):
-    #     text = self.person_name
-    #     if self.confidence < 0.9:
-    #         text += f" ({self.confidence:.2f})"
-            
-    #     font = QFont("Arial", max(8, 12))
-    #     font.setBold(True)
-    #     painter.setFont(font)
-    #     metrics = painter.fontMetrics()
-    #     text_rect = metrics.boundingRect(text)
-    
-    #     # Позиция текста над rect
-    #     text_pos = QPointF(viewport_rect.topLeft()) + QPointF(0, -5)
-    #     if text_pos.y() < 0:
-    #         text_pos = QPointF(viewport_rect.bottomLeft()) + QPointF(0, 5)
-            
-    #     # Фон
-    #     painter.fillRect(
-    #         text_pos.x() - 2, text_pos.y() - text_rect.height() - 2,
-    #         text_rect.width() + 4, text_rect.height() + 4,
-    #         QColor(0, 0, 0, 180)
-    #     )
-    #     # Текст
-    #     painter.setPen(QColor(255, 255, 255))
-    #     painter.drawText(text_pos, text_rect.height(), text)
-    def _draw_label(self, painter, view, viewport_rect):
+    def _draw_label(self, painter):
+        """Рисует метку с именем персоны"""
         text = self.person_name
         if self.confidence < 0.9:
             text += f" ({self.confidence:.2f})"
             
-        font = QFont("Arial", max(8, 12))
+        font = QFont("Arial", max(8, int(10 * self.scale_factor)))
         font.setBold(True)
         painter.setFont(font)
+        
+        # Измеряем размер текста
         metrics = painter.fontMetrics()
-        text_size = metrics.size(0, text)  # QRectF-like size
+        text_width = metrics.horizontalAdvance(text)
+        text_height = metrics.height()
         
-        # Позиция текста (QPointF)
-        text_pos = QPointF(viewport_rect.topLeft()) + QPointF(0, -5)
-        if text_pos.y() < 0:
-            text_pos = QPointF(viewport_rect.bottomLeft()) + QPointF(0, 5)
+        # Позиция текста (внутри рамки, сверху)
+        text_x = 2
+        text_y = text_height + 2
         
-        # Фон как QRectF (поддерживает float)
-        bg_rect = QRectF(
-            text_pos.x() - 2, text_pos.y() - text_size.height() - 2,
-            text_size.width() + 4, text_size.height() + 4
-        )
-        painter.fillRect(bg_rect, QColor(0, 0, 0, 180))
+        # Рисуем фон для текста
+        painter.fillRect(0, 0, text_width + 4, text_height + 4, QColor(0, 0, 0, 180))
         
-        # Текст
+        # Рисуем текст
         painter.setPen(QColor(255, 255, 255))
-        painter.drawText(bg_rect, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextSingleLine, text)
+        painter.drawText(2, text_height, text)
+        
+    def mousePressEvent(self, event):
+        """Обрабатывает клик по области лица"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.face_clicked.emit(self.face_id)
+        super().mousePressEvent(event)
+        
+    def enterEvent(self, event):
+        """Обрабатывает наведение мыши"""
+        self.is_hovered = True
+        self.update()
+        super().enterEvent(event)
+        
+    def leaveEvent(self, event):
+        """Обрабатывает уход мыши"""
+        self.is_hovered = False
+        self.update()
+        super().leaveEvent(event)
 
-class PhotoViewer(QGraphicsView):
+
+class PhotoViewer(QWidget):
     """Просмотрщик фото с оверлеем рамок лиц"""
     
     face_name_changed = pyqtSignal(int, str)  # face_id, new_name
@@ -177,38 +199,61 @@ class PhotoViewer(QGraphicsView):
         self.db_manager = db_manager
         self.config = config
         self.current_image_path = None
-        self.face_rectangles = []
+        self.original_pixmap = None
+        self.scaled_pixmap = None
+        self.scale_factor = 1.0
+        self.min_scale = 0.1
+        self.max_scale = 5.0
+        self.face_overlays = {}  # face_id -> FaceOverlayWidget
+        self.face_data = {}  # face_id -> face_info
+        
         self._init_ui()
-        # Создаем курсор зеленого цвета для отображения при наведении на области лиц
-        self.green_cursor = self._create_green_cursor()
-        
-    def _create_green_cursor(self):
-        """Создает курсор зеленого цвета"""
-        # Создаем пиксмап размером 24x24 пикселя
-        pixmap = QPixmap(24, 24)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        
-        # Рисуем зеленый крестик
-        painter = QPainter(pixmap)
-        painter.setPen(QPen(QColor(0, 255, 0), 2))
-        painter.drawLine(0, 12, 24, 12)  # Горизонтальная линия
-        painter.drawLine(12, 0, 12, 24)  # Вертикальная линия
-        painter.end()
-        
-        return QCursor(pixmap)
         
     def _init_ui(self):
-        self.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         
-        self.scene = QGraphicsScene()
-        self.setScene(self.scene)
-        self.pixmap_item = QGraphicsPixmapItem()
-        self.scene.addItem(self.pixmap_item)
+        # Создаем центральный виджет с изображением
+        self.central_widget = QWidget()
+        self.central_layout = QVBoxLayout(self.central_widget)
+        self.central_layout.setContentsMargins(0, 0, 0, 0)
         
-        self.setMouseTracking(True)
-        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
+        # QLabel для отображения изображения
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.image_label.setMinimumSize(1, 1)
+        
+        # Добавляем виджет с изображением
+        self.central_layout.addWidget(self.image_label)
+        
+        # Создаем overlay для рамок лиц
+        self.overlay_widget = QWidget(self.image_label)
+        self.overlay_widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.overlay_widget.setStyleSheet("background-color: rgba(0, 0, 0, 0);")
+        self.overlay_widget.hide()
+        
+        # Добавляем центральный виджет в прокручиваемую область
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidget(self.central_widget)
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.scroll_area.setFrameStyle(QFrame.Shape.NoFrame)
+        
+        # Подключаем обработчик прокрутки
+        self.scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
+        self.scroll_area.horizontalScrollBar().valueChanged.connect(self._on_scroll_changed)
+        
+        layout.addWidget(self.scroll_area)
+        
+        # Устанавливаем фокус для обработки клавиш
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.scroll_area.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.image_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        
+        # Устанавливаем политику размера
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.central_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
     def load_image(self, image_path):
         """Загружает изображение и лица"""
@@ -216,59 +261,84 @@ class PhotoViewer(QGraphicsView):
             QMessageBox.warning(self, "Ошибка", "Файл не существует")
             return False
             
+        # Загружаем изображение
         pixmap = QPixmap(image_path)
-        
-        physical_w, physical_h = pixmap.width(), pixmap.height()
-        
-        dpr = self.devicePixelRatioF()  # HiDPI factor
-        self.dpr = dpr
-        
-        # Устанавливаем DPR для pixmap
-        pixmap.setDevicePixelRatio(dpr)
         if pixmap.isNull():
             QMessageBox.warning(self, "Ошибка", "Не удалось загрузить изображение")
             return False
             
         self.current_image_path = image_path
-        self.pixmap_item.setPixmap(pixmap)
-        # Устанавливаем размер scene в соответствии с размером pixmap
-        scene_rect = QRectF(0, 0, pixmap.width(), pixmap.height())
-        self.scene.setSceneRect(scene_rect)
+        self.original_pixmap = pixmap
+        self.scale_factor = 1.0
         
-        # Устанавливаем изображение в центр scene
-        self.pixmap_item.setPos(0, 0)
+        print(f"[DEBUG] load_image: original pixmap size = {pixmap.size()}")
         
-        # Устанавливаем политику масштабирования для центрирования изображения
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        
-        
-        
-        self.face_rectangles.clear()
+        # Загружаем данные о лицах
         self.load_face_data(image_path)
         
-        # Устанавливаем политику выравнивания перед масштабированием
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        # Масштабируем изображение для отображения, чтобы оно помещалось в вид
-        self.fitInView(self.pixmap_item.boundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
-        # Дополнительно центрируем изображение в виду
-        self.centerOn(self.pixmap_item.boundingRect().center())
+        # Отображаем изображение
+        self._update_display()
         
-        # После загрузки изображения и масштабирования обновляем отображение
-        QTimer.singleShot(10, self._update_face_rectangles_after_scaling)
+        # Создаем оверлеи для лиц
+        self._create_face_overlays()
+        
+        # Подгоняем изображение под размер окна
+        QTimer.singleShot(100, self.fit_to_window)
         
         return True
 
-    def _update_face_rectangles_after_scaling(self):
-        """Обновляет отображение после масштабирования изображения"""
-        # Просто обновляем отображение, координаты в scene остаются теми же
-        # потому что координаты изображения и лиц хранятся в системе координат scene
-        self.viewport().update()
-        
-        
+    def _update_display(self):
+        """Обновляет отображение изображения с учетом масштаба"""
+        if self.original_pixmap and not self.original_pixmap.isNull():
+            print(f"[DEBUG] _update_display: original size = {self.original_pixmap.size()}, scale_factor = {self.scale_factor}")
+            
+            # Масштабируем изображение
+            scaled_size = self.original_pixmap.size() * self.scale_factor
+            self.scaled_pixmap = self.original_pixmap.scaled(
+                scaled_size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            
+            print(f"[DEBUG] _update_display: scaled size = {self.scaled_pixmap.size()}")
+            
+            # Устанавливаем изображение в label
+            self.image_label.setPixmap(self.scaled_pixmap)
+            
+            # Обновляем размеры overlay
+            self._update_overlay_geometry()
+            
+            # Обновляем масштаб оверлеев
+            self._update_face_overlay_scales()
+
+    def _update_overlay_geometry(self):
+        """Обновляет геометрию оверлея"""
+        if self.scaled_pixmap:
+            print(f"[DEBUG] _update_overlay_geometry: overlay size = {self.scaled_pixmap.size()}")
+            
+            # Устанавливаем размер оверлея равным размеру изображения
+            self.overlay_widget.resize(self.scaled_pixmap.size())
+            
+            # Так как оверлей является дочерним для image_label,
+            # и image_label отображает изображение, оверлей должен быть
+            # размером с изображение и в позиции (0, 0) относительно image_label
+            self.overlay_widget.move(0, 0)
+            
+            print(f"[DEBUG] _update_overlay_geometry: moved overlay to (0, 0) relative to image_label")
+            
+            self.overlay_widget.show()
+        else:
+            self.overlay_widget.hide()
+
+    def _update_face_overlay_scales(self):
+        """Обновляет масштаб всех оверлеев лиц"""
+        print(f"[DEBUG] _update_face_overlay_scales: scale_factor = {self.scale_factor}, number of overlays = {len(self.face_overlays)}")
+        for overlay in self.face_overlays.values():
+            overlay.set_scale_factor(self.scale_factor)
+
     def load_face_data(self, image_path):
         """Загружает лица из БД"""
-        self.face_rectangles.clear()
+        self.face_data.clear()
         try:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
@@ -290,95 +360,130 @@ class PhotoViewer(QGraphicsView):
                 
                 faces_data = cursor.fetchall()
                 
+                print(f"[DEBUG] load_face_data: found {len(faces_data)} faces for image {image_path}")
+                
                 for face_id, x1, y1, x2, y2, conf, name in faces_data:
-                    # Убираем деление на dpr, так как координаты из базы данных уже в логических пикселях
-                    bbox = (x1, y1, x2, y2)
+                    # Вычисляем bbox как (x, y, width, height)
+                    x = x1
+                    y = y1
+                    width = x2 - x1
+                    height = y2 - y1
                     
-                    face_rect = FaceRectangle(face_id, bbox, name, conf)
-                    self.face_rectangles.append(face_rect)
+                    print(f"[DEBUG] Face {face_id}: bbox=({x}, {y}, {width}, {height}), name={name}")
+                    
+                    self.face_data[face_id] = {
+                        'bbox': (x, y, width, height),
+                        'person_name': name,
+                        'confidence': conf
+                    }
                     
         except Exception as e:
             traceback.print_exc()
 
+    def _create_face_overlays(self):
+        """Создает оверлеи для отображения лиц"""
+        print(f"[DEBUG] _create_face_overlays: creating {len(self.face_data)} face overlays")
+        
+        # Удаляем существующие оверлеи
+        for overlay in self.face_overlays.values():
+            overlay.deleteLater()
+        self.face_overlays.clear()
+        
+        # Создаем новые оверлеи для каждого лица
+        for face_id, face_info in self.face_data.items():
+            bbox = face_info['bbox']
+            person_name = face_info['person_name']
+            confidence = face_info['confidence']
+            
+            print(f"[DEBUG] Creating overlay for face {face_id}: original bbox={bbox}")
+            
+            overlay = FaceOverlayWidget(
+                face_id, bbox, person_name, confidence, self.overlay_widget
+            )
+            overlay.face_clicked.connect(self.edit_face_name)
+            self.face_overlays[face_id] = overlay
+            
+        # Обновляем масштаб оверлеев
+        self._update_face_overlay_scales()
+        
+        print(f"[DEBUG] _create_face_overlays: finished creating overlays, current scale factor = {self.scale_factor}")
+
     def resizeEvent(self, event):
         """Обработка изменения размера виджета"""
         super().resizeEvent(event)
-        # Обновляем отображение при изменении размера
-        self.viewport().update()
+        # При изменении размера окна изображение может изменить размеры при подгонке
+        # Обновляем отображение с задержкой, чтобы избежать конфликта с другими обновлениями
+        QTimer.singleShot(50, self._update_display)
 
-    def drawForeground(self, painter, rect):
-        """Рисует оверлей рамок"""
-        if not self.face_rectangles:
-            return
-        painter.save()
-        for rect_item in self.face_rectangles:
-            rect_item.draw(painter, self)
-        painter.restore()
-        
-    def mouseMoveEvent(self, event):
-        """Наведение на рамки"""
-        # Получаем позицию мыши в координатах viewport
-        viewport_pos = event.pos()
-        
-        # Преобразуем в scene координаты
-        scene_pos = self.mapToScene(viewport_pos)
-        
-        hovered = False
-        for face_rect in self.face_rectangles:
-            was_hovered = face_rect.is_hovered
-            face_rect.is_hovered = face_rect.contains_scene_point(scene_pos)
-            if face_rect.is_hovered:
-                hovered = True
-            if face_rect.is_hovered != was_hovered:
-                self.viewport().update()
-                # self.viewport().update(self.mapToScene(event.pos()).boundingRect().adjusted(-50, -50, 50))  # Локальный redraw
-                
-        # self.setCursor(Qt.PointingHandCursor if hovered else Qt.ArrowCursor)
-        if hovered:
-            # Устанавливаем зеленый курсор при наведении на область лица
-            self.setCursor(self.green_cursor)
-        else:
-            self.setCursor(Qt.CursorShape.ArrowCursor)
-        super().mouseMoveEvent(event)
-        
-    def mousePressEvent(self, event):
-        # if event.button() == Qt.LeftButton:
-        if event.button() == Qt.MouseButton.LeftButton:
-            scene_pos = self.mapToScene(event.pos())
-            for face_rect in self.face_rectangles:
-                if face_rect.contains_scene_point(scene_pos):
-                    self.edit_face_name(face_rect)
-                    break
-        super().mousePressEvent(event)
-        
     def wheelEvent(self, event):
         """Zoom колесиком"""
-        factor = 1.25 if event.angleDelta().y() > 0 else 0.8
-        self.scale(factor, factor)
+        # Определяем направление колеса
+        delta = event.angleDelta().y()
+        if delta > 0:
+            # Увеличение
+            factor = 1.2
+        else:
+            # Уменьшение
+            factor = 0.8
+            
+        # Вычисляем новый масштаб
+        new_scale = self.scale_factor * factor
         
+        # Проверяем ограничения
+        if self.min_scale <= new_scale <= self.max_scale:
+            self.scale_factor = new_scale
+            self._update_display()
+            
+        event.accept()
+
+    def _on_scroll_changed(self, value):
+        """Обработчик изменения прокрутки"""
+        print(f"[DEBUG] Scroll changed: {value}")
+        # При прокрутке оверлей автоматически прокручивается вместе с родительским элементом
+        # Нам не нужно обновлять его позицию, так как он дочерний для image_label
+        pass  # Убираем обновление оверлея при прокрутке
+
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
             self.closed.emit()
         elif event.key() in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
-            self.scale(1.2, 1.2)
+            # Увеличение
+            new_scale = min(self.scale_factor * 1.2, self.max_scale)
+            if new_scale != self.scale_factor:
+                self.scale_factor = new_scale
+                self._update_display()
         elif event.key() == Qt.Key.Key_Minus:
-            self.scale(0.8, 0.8)
+            # Уменьшение
+            new_scale = max(self.scale_factor * 0.8, self.min_scale)
+            if new_scale != self.scale_factor:
+                self.scale_factor = new_scale
+                self._update_display()
         elif event.key() == Qt.Key.Key_0:
-            self.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
-        super().keyPressEvent(event)
-        
-    def edit_face_name(self, face_rect):
-        dialog = FaceEditDialog(face_rect.person_name, self.db_manager, self)
-        # if dialog.exec() == QDialog.Accepted:
+            # Сброс масштаба
+            self.scale_factor = 1.0
+            self._update_display()
+        else:
+            super().keyPressEvent(event)
+
+    def edit_face_name(self, face_id):
+        """Открывает диалог редактирования имени лица"""
+        face_info = self.face_data.get(face_id)
+        if not face_info:
+            return
+            
+        dialog = FaceEditDialog(face_info['person_name'], self.db_manager, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             new_name = dialog.get_name()
-            if new_name and new_name != face_rect.person_name:
-                if self._update_face_name(face_rect.face_id, new_name):
-                    face_rect.person_name = new_name
-                    self.viewport().update()
-                    self.face_name_changed.emit(face_rect.face_id, new_name)
-                    
+            if new_name and new_name != face_info['person_name']:
+                if self._update_face_name(face_id, new_name):
+                    # Обновляем информацию о лице
+                    face_info['person_name'] = new_name
+                    self.face_overlays[face_id].person_name = new_name
+                    self.face_overlays[face_id].update()
+                    self.face_name_changed.emit(face_id, new_name)
+
     def _update_face_name(self, face_id, new_name):
+        """Обновляет имя лица в базе данных"""
         try:
             person_id = self.db_manager.get_person_by_name(new_name)
             if not person_id:
@@ -387,6 +492,42 @@ class PhotoViewer(QGraphicsView):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка обновления: {e}")
             return False
+
+    def scale_image(self, factor):
+        """Масштабирует изображение"""
+        new_scale = self.scale_factor * factor
+        if self.min_scale <= new_scale <= self.max_scale:
+            self.scale_factor = new_scale
+            self._update_display()
+        
+    def fit_to_window(self):
+        """Подгоняет изображение под размер окна"""
+        if self.original_pixmap:
+            print(f"[DEBUG] fit_to_window: original size = {self.original_pixmap.size()}")
+            
+            # Получаем размер области просмотра
+            available_size = self.scroll_area.viewport().size()
+            print(f"[DEBUG] fit_to_window: available size = {available_size}")
+            
+            # Учитываем отступы
+            margin = 20
+            available_size.setWidth(available_size.width() - margin)
+            available_size.setHeight(available_size.height() - margin)
+            
+            # Вычисляем масштаб для вмещения изображения
+            pixmap_size = self.original_pixmap.size()
+            width_ratio = available_size.width() / pixmap_size.width()
+            height_ratio = available_size.height() / pixmap_size.height()
+            
+            new_scale = min(width_ratio, height_ratio)
+            
+            print(f"[DEBUG] fit_to_window: width_ratio={width_ratio}, height_ratio={height_ratio}, new_scale={new_scale}")
+            
+            # Устанавливаем масштаб
+            self.scale_factor = max(self.min_scale, min(new_scale, self.max_scale))
+            print(f"[DEBUG] fit_to_window: final scale_factor = {self.scale_factor}")
+            self._update_display()
+
 
 class PhotoViewerWindow(QWidget):
     """Главное окно просмотра"""
@@ -421,7 +562,7 @@ class PhotoViewerWindow(QWidget):
         layout.setContentsMargins(10, 5, 10, 5)
         
         self.control_panel.setStyleSheet("""
-            QWidget { background: rgba(0,0,0.7); border-radius: 8px; color: white; }
+            QWidget { background: rgba(0,0,0,0.7); border-radius: 8px; color: white; }
             QPushButton { background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); 
                           border-radius: 4px; padding: 5px; min-width: 30px; color: white; font-weight: bold; }
             QPushButton:hover { background: rgba(255,255,255,0.4); }
@@ -433,15 +574,13 @@ class PhotoViewerWindow(QWidget):
         layout.addWidget(self.filename_label)
         
         btns = [
-            ("+", self.viewer.scale, (1.2, 1.2), "Zoom In"),
-            ("-", self.viewer.scale, (0.8, 0.8), "Zoom Out"),
-            # ("Fit", lambda: self.viewer.fitInView(self.viewer.scene.itemsBoundingRect(), Qt.KeepAspectRatio), None, "Fit to Window"),
-            ("Fit", lambda: self.viewer.fitInView(self.viewer.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio), None, "Fit to Window"),
-
-            ("FS", self.toggle_fullscreen, None, "Fullscreen (F)"),
-            ("F2", self.rename_current_file, None, "Rename File"),
-            ("E", self.open_in_external_editor, None, "Open in External Editor"),
-            ("✕", self.close, None, "Close (Esc)"),
+            ("+", self.scale_image, (1.2,), "Zoom In"),
+            ("-", self.scale_image, (0.8,), "Zoom Out"),
+            ("Fit", self.fit_to_window, (), "Fit to Window"),
+            ("FS", self.toggle_fullscreen, (), "Fullscreen (F)"),
+            ("F2", self.rename_current_file, (), "Rename File"),
+            ("E", self.open_in_external_editor, (), "Open in External Editor"),
+            ("✕", self.close, (), "Close (Esc)"),
         ]
         
         for text, func, args, tip in btns:
@@ -458,7 +597,6 @@ class PhotoViewerWindow(QWidget):
         
     def show_image(self, image_path):
         if self.viewer.load_image(image_path):
-            QTimer.singleShot(10, self._auto_fit)
             self.show()
             self.activateWindow()
             self.raise_()
@@ -467,10 +605,15 @@ class PhotoViewerWindow(QWidget):
             return True
         return False
         
-    def _auto_fit(self):
-        # self.viewer.fitInView(self.viewer.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
-        self.viewer.fitInView(self.viewer.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
-
+        
+    def scale_image(self, factor):
+        """Масштабирует изображение"""
+        self.viewer.scale_image(factor)
+        
+    def fit_to_window(self):
+        """Подгоняет изображение под размер окна"""
+        self.viewer.fit_to_window()
+        
     def rename_current_file(self):
         """Переименовывает текущий файл"""
         if not self.viewer.current_image_path:
@@ -513,7 +656,6 @@ class PhotoViewerWindow(QWidget):
                 # Обновляем имя файла в интерфейсе
                 self.filename_label.setText(os.path.basename(new_path))
 
-                # QMessageBox.information(self, "Успех", "Файл успешно переименован")
             except OSError as e:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось переименовать файл: {e}")
 
@@ -553,11 +695,8 @@ class PhotoViewerWindow(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть файл во внешнем редакторе: {e}")
 
-
-        
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        QTimer.singleShot(50, self._auto_fit)
         # Переместить панель в угол
         self.control_panel.move(self.width() - self.control_panel.width() - 20, 20)
         
