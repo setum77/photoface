@@ -73,6 +73,7 @@ class DatabaseManager:
                     bbox_x2 REAL,
                     bbox_y2 REAL,
                     confidence REAL,
+                    is_person BOOLEAN DEFAULT 0,
                     created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (image_id) REFERENCES images (id) ON DELETE CASCADE,
                     FOREIGN KEY (person_id) REFERENCES persons (id) ON DELETE CASCADE
@@ -304,11 +305,11 @@ class DatabaseManager:
                     return None
                 
                 cursor.execute('''
-                    INSERT INTO faces 
-                    (image_id, person_id, embedding, bbox_x1, bbox_y1, bbox_x2, bbox_y2, confidence)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (image_id, person_id, embedding, 
-                    x1, y1, x2, y2, confidence))
+                    INSERT INTO faces
+                    (image_id, person_id, embedding, bbox_x1, bbox_y1, bbox_x2, bbox_y2, confidence, is_person)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (image_id, person_id, embedding,
+                    x1, y1, x2, y2, confidence, 0))
                 conn.commit()
                 face_id = cursor.lastrowid
                 logger.debug(f"Добавлено лицо: image_id={image_id}, person_id={person_id}, confidence={confidence:.3f}, bbox=({x1},{y1},{x2},{y2})")
@@ -396,8 +397,8 @@ class DatabaseManager:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT f.id, f.image_id, i.file_path, f.bbox_x1, f.bbox_y1, 
-                       f.bbox_x2, f.bbox_y2, f.confidence
+                SELECT f.id, f.image_id, i.file_path, f.bbox_x1, f.bbox_y1,
+                       f.bbox_x2, f.bbox_y2, f.confidence, f.is_person
                 FROM faces f
                 JOIN images i ON f.image_id = i.id
                 WHERE f.person_id = ?
@@ -420,7 +421,7 @@ class DatabaseManager:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT f.id, f.embedding, p.name
+                SELECT f.id, f.embedding, p.name, f.is_person
                 FROM faces f
                 JOIN persons p ON f.person_id = p.id
                 WHERE p.name = 'not recognized'
@@ -472,6 +473,26 @@ class DatabaseManager:
             conn.commit()
             return cursor.rowcount > 0
 
+    def set_face_person_status(self, face_id, is_person):
+        """Устанавливает статус подтверждения принадлежности лица персоне"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE faces SET is_person = ? WHERE id = ?
+            ''', (is_person, face_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def get_face_person_status(self, face_id):
+        """Возвращает статус подтверждения принадлежности лица персоне"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT is_person FROM faces WHERE id = ?
+            ''', (face_id,))
+            result = cursor.fetchone()
+            return result[0] if result else None
+
     def create_new_person_from_face(self, face_id, person_name):
         """Создает новую персону и перемещает в нее лицо"""
         with self.get_connection() as conn:
@@ -514,8 +535,8 @@ class DatabaseManager:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT f.id, f.bbox_x1, f.bbox_y1, f.bbox_x2, f.bbox_y2, 
-                    f.confidence, p.name, p.id as person_id
+                SELECT f.id, f.bbox_x1, f.bbox_y1, f.bbox_x2, f.bbox_y2,
+                    f.confidence, p.name, p.id as person_id, f.is_person
                 FROM faces f
                 JOIN images i ON f.image_id = i.id
                 JOIN persons p ON f.person_id = p.id

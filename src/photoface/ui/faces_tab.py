@@ -18,13 +18,13 @@ class FaceThumbnailWidget(QFrame):
     face_rejected = pyqtSignal(int)   # face_id
     face_double_clicked = pyqtSignal(str) # image_path
     
-    def __init__(self, face_id, image_path, bbox, confidence, is_person_confirmed=False, parent=None):
+    def __init__(self, face_id, image_path, bbox, confidence, is_person_status=None, parent=None):
         super().__init__(parent)
         self.face_id = face_id
         self.image_path = image_path
         self.bbox = bbox
         self.confidence = confidence
-        self.is_person_confirmed = is_person_confirmed
+        self.is_person_status = is_person_status  # 1 - подтверждено, 0 - не подтверждено
         self.init_ui()
         
     def init_ui(self):
@@ -46,8 +46,7 @@ class FaceThumbnailWidget(QFrame):
         
         self.confirm_btn = QToolButton()
         self.confirm_btn.setFixedSize(24, 24)
-																		  
-												 
+        
         self.confirm_btn.clicked.connect(lambda: self.face_confirmed.emit(self.face_id))
         
         self.reject_btn = QToolButton()
@@ -79,12 +78,12 @@ class FaceThumbnailWidget(QFrame):
         self.update_buttons()
 
     def update_buttons(self):
-        if self.is_person_confirmed:
+        if self.is_person_status == 1:  # Подтверждено
             self.confirm_btn.setText("😊")
             self.confirm_btn.setToolTip("Персона подтверждена")
             self.confirm_btn.setEnabled(False)
             self.confirm_btn.setStyleSheet("QToolButton { background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; }")
-        else:
+        else:  # Не подтверждено (0 или None)
             self.confirm_btn.setText("✓")
             self.confirm_btn.setToolTip("Подтвердить лицо")
             self.confirm_btn.setEnabled(True)
@@ -208,10 +207,11 @@ class FacesTab(QWidget):
     image_double_clicked = pyqtSignal(str)
     needs_refresh = pyqtSignal()
     
-    def __init__(self, db_manager: DatabaseManager):
+    def __init__(self, db_manager: DatabaseManager, config=None):
         super().__init__()
         self.db_manager = db_manager
-        self.face_clusterer = FaceClusterer(db_manager)
+        self.config = config
+        self.face_clusterer = FaceClusterer(db_manager, config=config)
         self.current_person_id = None
         self.init_ui()
         
@@ -382,11 +382,11 @@ class FacesTab(QWidget):
                 person_confirmed = confirmed
                 break
         
-        for face_id, image_id, image_path, x1, y1, x2, y2, confidence in faces:
+        for face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status in faces:
             # Создаем кортеж bbox из отдельных координат
             bbox = (x1, y1, x2, y2)
             face_widget = FaceThumbnailWidget(
-                face_id, image_path, bbox, confidence, person_confirmed
+                face_id, image_path, bbox, confidence, is_person_status
             )
             
             face_widget.face_confirmed.connect(self.on_face_confirmed)
@@ -401,27 +401,29 @@ class FacesTab(QWidget):
                 row += 1
                 
     def on_face_confirmed(self, face_id):
-        """Обрабатывает подтверждение лица"""
-        if self.current_person_id:
-            if self.db_manager.confirm_person(self.current_person_id):
-                QMessageBox.information(self, "Успех", "Персона подтверждена")
-                self.refresh_data()
-                if self.current_person_id:
-                    self.load_person_faces(self.current_person_id)
-                
+        """Обрабатывает подтверждение лица - устанавливает is_person = 1"""
+        # Просто устанавливаем is_person = 1 для подтвержденного лица
+        if self.db_manager.set_face_person_status(face_id, 1):
+            QMessageBox.information(self, "Успех", "Лицо подтверждено")
+            self.refresh_data()
+            if self.current_person_id:
+                self.load_person_faces(self.current_person_id)
+        
     def on_face_rejected(self, face_id):
-        """Обрабатывает отклонение лица"""
+        """Обрабатывает отклонение лица - перемещает лицо в not recognized"""
         reply = QMessageBox.question(
             self, "Подтверждение",
-            "Убрать это лицо из персоны?",
+            "Убрать лицо из персоны?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         
         if reply == QMessageBox.StandardButton.Yes:
-            # Перемещаем лицо обратно в "not recognized"
+            # Перемещаем лицо в "not recognized"
             not_recognized_id = self.db_manager.get_person_by_name('not recognized')
             if not_recognized_id:
                 if self.db_manager.move_face_to_person(face_id, not_recognized_id):
+                    # Устанавливаем is_person = 0 для лица, которое перемещается в "not recognized"
+                    self.db_manager.set_face_person_status(face_id, 0)
                     QMessageBox.information(self, "Успех", "Лицо убрано из персоны")
                     self.refresh_data()
                     self.needs_refresh.emit()
@@ -436,30 +438,24 @@ class FacesTab(QWidget):
             
             menu = QMenu(self)
             
-            rename_action = QAction("Переименовать", self)
-            rename_action.triggered.connect(lambda: self.rename_person(person_id, person_name))
-            menu.addAction(rename_action)
-            
-            if not is_confirmed:
-                confirm_action = QAction("Подтвердить", self)
-                confirm_action.triggered.connect(lambda: self.confirm_person(person_id))
-                menu.addAction(confirm_action)
+            # Не показываем "Переименовать" и "Подтвердить все лица" для категории "not recognized"
+            if person_name != 'not recognized':
+                rename_action = QAction("Переименовать", self)
+                rename_action.setShortcut("F2")  # Горячая клавиша для переименования
+                rename_action.triggered.connect(lambda: self.rename_person(person_id, person_name))
+                menu.addAction(rename_action)
                 
+                if not is_confirmed:
+                    confirm_all_faces_action = QAction("Подтвердить все лица", self)
+                    confirm_all_faces_action.triggered.connect(lambda: self.confirm_all_faces(person_id))
+                    menu.addAction(confirm_all_faces_action)
+            
             delete_action = QAction("Удалить персону", self)
             delete_action.triggered.connect(lambda: self.delete_person(person_id))
             menu.addAction(delete_action)
             
             menu.exec(self.persons_list.viewport().mapToGlobal(position))
             
-    # def rename_person(self, person_id, current_name):
-    #     """Переименовывает персону"""
-    #     dialog = PersonNameDialog(current_name, self)
-    #     if dialog.exec() == QDialog.DialogCode.Accepted:
-    #         new_name = dialog.get_name()
-    #         if new_name and new_name != current_name:
-    #             if self.db_manager.update_person_name(person_id, new_name):
-    #                 self.refresh_data()
-    #                 self.needs_refresh.emit()
     def rename_person(self, person_id, current_name):
         """Переименовывает персону или сливает с существующей (предотвращает дубли)"""
         dialog = PersonNameDialog(current_name, self.db_manager, person_id, self)
@@ -485,7 +481,9 @@ class FacesTab(QWidget):
                     # Обычное переименование (если имя новое)
                     print(f"[DEBUG] Rename to new name: '{new_name}' (no target)")
                     if self.db_manager.update_person_name(person_id, new_name):
-                        success_msg = f"Персона переименована в **новое** имя '{new_name}'"
+                        # Автоматически подтверждаем персону при переименовании
+                        self.db_manager.confirm_person(person_id)
+                        success_msg = f"Персона переименована в **новое** имя '{new_name}' и подтверждена"
                     else:
                         raise Exception("Ошибка переименования")
                 
@@ -505,6 +503,14 @@ class FacesTab(QWidget):
             QMessageBox.information(self, "Успех", "Персона подтверждена")
             self.refresh_data()
             self.needs_refresh.emit()
+            
+    def confirm_all_faces(self, person_id):
+        """Подтверждает все лица для персоны"""
+        # Обновляем статус подтверждения персоны
+        self.db_manager.confirm_person(person_id)
+        self.refresh_data()
+        self.needs_refresh.emit()
+        QMessageBox.information(self, "Успех", "Все лица подтверждены")
             
     def delete_person(self, person_id):
         """Удаляет персону (перемещает все лица в not recognized)"""
@@ -597,7 +603,7 @@ class FacesTab(QWidget):
                 progress.close()
                 
                 QMessageBox.information(
-                    self, "Успех", 
+                    self, "Успех",
                     f"Создано {created_persons} новых персон из {len(clusters)} кластеров"
                 )
                 

@@ -16,9 +16,10 @@ class FaceClusterer:
     обработки изображений.
     """
     
-    def __init__(self, db_manager, similarity_threshold=0.6):
+    def __init__(self, db_manager, similarity_threshold=0.6, config=None):
         self.db_manager = db_manager
         self.similarity_threshold = similarity_threshold
+        self.config = config
         
     def cluster_faces(self) -> Dict[int, List[int]]:
         """
@@ -28,6 +29,16 @@ class FaceClusterer:
             Dict[int, List[int]]: Словарь {cluster_id: [face_ids]}
         """
         try:
+            # Логирование параметров кластеризации
+            model_name = self.config.get('scan.face_model_name', 'unknown') if self.config else 'unknown'
+            threshold = self.config.get('scan.similarity_threshold', self.similarity_threshold) if self.config else self.similarity_threshold
+            min_confidence = self.config.get('scan.min_face_confidence', 'unknown') if self.config else 'unknown'
+            
+            logger.info(f"Начало кластеризации лиц")
+            logger.info(f"Модель: {model_name}")
+            logger.info(f"Порог схожести: {threshold}")
+            logger.info(f"Минимальная уверенность лица: {min_confidence}")
+            
             # Получаем все нераспознанные эмбеддинги
             face_data = self.db_manager.get_all_face_embeddings()
             
@@ -38,7 +49,7 @@ class FaceClusterer:
             face_ids = []
             embeddings = []
             
-            for face_id, embedding_bytes, _ in face_data:
+            for face_id, embedding_bytes, _, _ in face_data:  # Обновляем, чтобы получить is_person
                 if embedding_bytes:
                     embedding = np.frombuffer(embedding_bytes, dtype=np.float32)
                     face_ids.append(face_id)
@@ -59,12 +70,12 @@ class FaceClusterer:
             
             similarity_matrix = cosine_similarity(embeddings_array)
             similarity_matrix = np.clip(similarity_matrix, -1, 1)  # Clamp
-            distance_matrix = 1 - similarity_matrix  # Теперь >=0
+            distance_matrix = 1 - similarity_matrix # Теперь >=0
             
             # Используем DBSCAN для кластеризации
             clustering = DBSCAN(
-                eps=1 - self.similarity_threshold,
-                min_samples=1,
+                eps=1 - threshold,
+                min_samples=2,  # Теперь кластер формируется только если в нем 2 или более лиц
                 metric='precomputed'
             )
             
@@ -74,8 +85,8 @@ class FaceClusterer:
             cluster_groups = {}
             for face_id, cluster_id in zip(face_ids, clusters):
                 if cluster_id == -1:
-                    # Шум - создаем отдельный кластер для каждого лица
-                    cluster_id = f"noise_{face_id}"
+                    # Шум - не группируем, оставляем как отдельные лица в "not recognized"
+                    continue # Пропускаем шумовые точки
                 
                 if cluster_id not in cluster_groups:
                     cluster_groups[cluster_id] = []
@@ -107,6 +118,8 @@ class FaceClusterer:
                     # Перемещаем все лица кластера к новой персоне
                     for face_id in face_ids:
                         self.db_manager.move_face_to_person(face_id, person_id)
+                        # Устанавливаем is_person = 0, так как это автоматически сгруппированные лица
+                        self.db_manager.set_face_person_status(face_id, 0)
                     created_persons += 1
             
             logger.info(f"Создано {created_persons} новых персон из кластеров")
@@ -121,7 +134,7 @@ class FaceClusterer:
         Находит похожие лица для заданного лица
         """
         if threshold is None:
-            threshold = self.similarity_threshold
+            threshold = self.config.get('scan.similarity_threshold', self.similarity_threshold) if self.config else self.similarity_threshold
             
         try:
             # Получаем эмбеддинг целевого лица

@@ -37,7 +37,7 @@ class MainWindow(QMainWindow):
 
         # Создание вкладок
         self.folders_tab = FoldersTab(self.db_manager, self.config)
-        self.faces_tab = FacesTab(self.db_manager)
+        self.faces_tab = FacesTab(self.db_manager, self.config)
         self.albums_tab = AlbumsTab(self.db_manager, self.config)
 
         self.tabs.addTab(self.folders_tab, "Папки")
