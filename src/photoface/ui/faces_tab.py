@@ -93,34 +93,23 @@ class FaceThumbnailWidget(QFrame):
     def load_face_thumbnail(self):
         """Загружает и обрезает миниатюру лица"""
         try:
-            # Генерируем миниатюру всего изображения
-            thumbnail = generate_thumbnail(self.image_path, size=(200, 200))
-            if thumbnail:
-                # Обрезаем область лица
+            # Открываем оригинальное изображение
+            from PIL import Image
+            with Image.open(self.image_path) as orig_img:
+                # Получаем координаты области лица
                 x1, y1, x2, y2 = self.bbox
 
                 # Убедимся, что координаты - числа
                 x1, y1, x2, y2 = float(x1), float(y1), float(x2), float(y2)
                 
-                # Масштабируем координаты к размеру миниатюры
-                img_width, img_height = thumbnail.size
-                orig_width, orig_height = self.get_original_image_size()
+                # Обрезаем область лица из оригинального изображения
+                face_crop = orig_img.crop((int(x1), int(y1), int(x2), int(y2)))
                 
-                if orig_width and orig_height:
-                    scale_x = img_width / float(orig_width)
-                    scale_y = img_height / float(orig_height)
-                    
-                    x1_scaled = int(x1 * scale_x)
-                    y1_scaled = int(y1 * scale_y)
-                    x2_scaled = int(x2 * scale_x)
-                    y2_scaled = int(y2 * scale_y)
-                    
-                    # Обрезаем область лица
-                    face_thumb = thumbnail.crop((x1_scaled, y1_scaled, x2_scaled, y2_scaled))
-                    face_thumb = face_thumb.resize((120, 120))
-                    
-                    pixmap = pil_to_pixmap(face_thumb)
-                    self.thumbnail_label.setPixmap(pixmap)
+                # Масштабируем до размера миниатюры
+                face_thumb = face_crop.resize((120, 120))
+                
+                pixmap = pil_to_pixmap(face_thumb)
+                self.thumbnail_label.setPixmap(pixmap)
         except Exception as e:
             print(f"Ошибка загрузки миниатюры лица: {e}")
             import traceback
