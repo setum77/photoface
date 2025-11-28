@@ -9,6 +9,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QPixmap, QIcon, QFont, QAction
 from src.photoface.core.database import DatabaseManager
 from src.photoface.core.face_clusterer import FaceClusterer
+from src.photoface.ui.photo_viewer import FaceEditDialog
 from src.photoface.utils.helpers import generate_thumbnail, pil_to_pixmap
 
 class FaceThumbnailWidget(QFrame):
@@ -179,12 +180,23 @@ class PersonNameDialog(QDialog):
         self.suggestions_list.clear()
         
         for person_id, name, is_confirmed, face_count in self.persons:
-            if (person_id != self.current_person_id and 
-                is_confirmed and 
-                query in name.lower() and 
+            if (person_id != self.current_person_id and
+                is_confirmed and
+                query in name.lower() and
                 name.lower() != 'not recognized'):
                 
-                display_text = f"{name} ({face_count} фото)"
+                # Подсчитываем количество подтвержденных и неподтвержденных лиц для персоны
+                person_faces = self.db_manager.get_person_faces(person_id)
+                confirmed_faces = sum(1 for face in person_faces if face[8] == 1)  # is_person_status
+                unconfirmed_faces = len(person_faces) - confirmed_faces
+                
+                if confirmed_faces == face_count and face_count > 0:  # Все лица подтверждены
+                    display_text = f"{name} ({face_count} фото)"
+                elif unconfirmed_faces > 0:  # Есть неподтвержденные лица
+                    display_text = f"{name} ({confirmed_faces}+{unconfirmed_faces}={face_count} фото)"
+                else:  # Все лица подтверждены или нет лиц
+                    display_text = f"{name} ({face_count} фото)"
+                    
                 item = QListWidgetItem(display_text)
                 item.setData(Qt.ItemDataRole.UserRole, person_id)
                 self.suggestions_list.addItem(item)
@@ -224,6 +236,18 @@ class FacesTab(QWidget):
         toolbar_layout = QHBoxLayout()
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
         
+        # Поле для порога схожести
+        similarity_threshold_label = QLabel("Порог схожести:")
+        self.similarity_threshold_edit = QLineEdit()
+        self.similarity_threshold_edit.setFixedWidth(60)
+        # Устанавливаем начальное значение из настроек
+        if self.config:
+            threshold = self.config.get('scan.similarity_threshold', 0.6)
+            self.similarity_threshold_edit.setText(str(threshold))
+        
+        # Обработчик изменения значения
+        self.similarity_threshold_edit.editingFinished.connect(self.on_similarity_threshold_changed)
+        
         self.cluster_btn = QPushButton("Группировать лица")
         self.cluster_btn.clicked.connect(self.cluster_faces)
         
@@ -235,6 +259,8 @@ class FacesTab(QWidget):
                 
         self.stats_label = QLabel("Загрузка...")
                 
+        toolbar_layout.addWidget(similarity_threshold_label)
+        toolbar_layout.addWidget(self.similarity_threshold_edit)
         toolbar_layout.addWidget(self.cluster_btn)
         toolbar_layout.addWidget(self.refresh_btn)
         toolbar_layout.addWidget(self.delete_empty_persons_btn)
@@ -298,7 +324,7 @@ class FacesTab(QWidget):
         self.update_stats()
         
     def load_persons(self):
-        """Загружает список персон"""
+        """Загружает список персоны"""
         self.persons_model.clear()
         persons = self.db_manager.get_person_stats()
         
@@ -307,10 +333,15 @@ class FacesTab(QWidget):
         unconfirmed_persons = []
         
         for person_id, name, is_confirmed, face_count in persons:
+            # Подсчитываем количество подтвержденных и неподтвержденных лиц для персоны
+            person_faces = self.db_manager.get_person_faces(person_id)
+            confirmed_faces = sum(1 for face in person_faces if face[8] == 1)  # is_person_status
+            unconfirmed_faces = len(person_faces) - confirmed_faces
+            
             if is_confirmed:
-                confirmed_persons.append((person_id, name, is_confirmed, face_count))
+                confirmed_persons.append((person_id, name, is_confirmed, face_count, confirmed_faces, unconfirmed_faces))
             else:
-                unconfirmed_persons.append((person_id, name, is_confirmed, face_count))
+                unconfirmed_persons.append((person_id, name, is_confirmed, face_count, confirmed_faces, unconfirmed_faces))
         
         # Сортируем подтвержденные персоны по алфавиту
         confirmed_persons.sort(key=lambda x: x[1].lower())  # Сортировка по имени (x[1])
@@ -320,8 +351,14 @@ class FacesTab(QWidget):
         # Объединяем списки: сначала подтвержденные (отсортированные), затем неподтвержденные (отсортированные)
         sorted_persons = confirmed_persons + unconfirmed_persons
         
-        for person_id, name, is_confirmed, face_count in sorted_persons:
-            display_name = f"{name} ({face_count})"
+        for person_id, name, is_confirmed, face_count, confirmed_faces, unconfirmed_faces in sorted_persons:
+            if confirmed_faces == face_count and face_count > 0:  # Все лица подтверждены
+                display_name = f"{name} ({face_count})"
+            elif unconfirmed_faces > 0:  # Есть неподтвержденные лица
+                display_name = f"{name} ({confirmed_faces}+{unconfirmed_faces}={face_count})"
+            else:  # Все лица подтверждены или нет лиц
+                display_name = f"{name} ({face_count})"
+                
             if not is_confirmed:
                 display_name = f"* {display_name}"
                 
@@ -401,13 +438,49 @@ class FacesTab(QWidget):
                 row += 1
                 
     def on_face_confirmed(self, face_id):
-        """Обрабатывает подтверждение лица - устанавливает is_person = 1"""
-        # Просто устанавливаем is_person = 1 для подтвержденного лица
-        if self.db_manager.set_face_person_status(face_id, 1):
-            QMessageBox.information(self, "Успех", "Лицо подтверждено")
-            self.refresh_data()
-            if self.current_person_id:
-                self.load_person_faces(self.current_person_id)
+        """Обрабатывает подтверждение лица - устанавливает is_person = 1 или открывает диалог редактирования для not recognized"""
+        # Получаем информацию о лице и связанной персоне
+        with self.db_manager.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT f.id, f.image_id, f.person_id, f.bbox_x1, f.bbox_y1, f.bbox_x2, f.bbox_y2, f.confidence, f.is_person,
+                       p.name as person_name, p.is_confirmed as person_confirmed
+                FROM faces f
+                JOIN persons p ON f.person_id = p.id
+                WHERE f.id = ?
+            ''', (face_id,))
+            face_info = cursor.fetchone()
+        
+        if not face_info:
+            return
+            
+        # Получаем имя персоны из результата запроса
+        person_name = face_info[10] # индекс поля person_name в SELECT
+        
+        # Если персона "not recognized", открываем диалог редактирования
+        if person_name == 'not recognized':
+            dialog = FaceEditDialog("", self.db_manager, self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                new_name = dialog.get_name()
+                if new_name:
+                    # Создаем новую персону с введенным именем
+                    new_person_id = self.db_manager.create_person(new_name)
+                    if new_person_id:
+                        # Перемещаем лицо в новую персону
+                        if self.db_manager.move_face_to_person(face_id, new_person_id):
+                            # Подтверждаем персону
+                            self.db_manager.confirm_person(new_person_id)
+                            # Устанавливаем is_person = 1 для этого лица
+                            self.db_manager.set_face_person_status(face_id, 1)
+                            self.refresh_data()
+                            if self.current_person_id:
+                                self.load_person_faces(self.current_person_id)
+        else:
+            # Просто устанавливаем is_person = 1 для подтвержденного лица
+            if self.db_manager.set_face_person_status(face_id, 1):
+                self.refresh_data()
+                if self.current_person_id:
+                    self.load_person_faces(self.current_person_id)
         
     def on_face_rejected(self, face_id):
         """Обрабатывает отклонение лица - перемещает лицо в not recognized"""
@@ -613,5 +686,28 @@ class FacesTab(QWidget):
             except Exception as e:
                 progress.close()
                 QMessageBox.critical(self, "Ошибка", f"Ошибка при группировке: {e}")
+
+    def on_similarity_threshold_changed(self):
+        """Обновляет значение порога схожести в настройках"""
+        try:
+            new_value = float(self.similarity_threshold_edit.text())
+            # Ограничиваем значение в разумных пределах
+            if 0.0 <= new_value <= 1.0:
+                if self.config:
+                    self.config.set('scan.similarity_threshold', new_value)
+                    # Обновляем значение в face_clusterer, если он существует
+                    if self.face_clusterer:
+                        self.face_clusterer.similarity_threshold = new_value
+            else:
+                # Если значение вне диапазона, восстанавливаем предыдущее
+                current_value = self.config.get('scan.similarity_threshold', 0.6) if self.config else 0.6
+                self.similarity_threshold_edit.setText(str(current_value))
+                QMessageBox.warning(self, "Неверное значение", "Порог схожести должен быть в диапазоне от 0.0 до 1.0")
+        except ValueError:
+            # Если введено не число, восстанавливаем предыдущее значение
+            current_value = self.config.get('scan.similarity_threshold', 0.6) if self.config else 0.6
+            self.similarity_threshold_edit.setText(str(current_value))
+            QMessageBox.warning(self, "Неверное значение", "Пожалуйста, введите числовое значение для порога схожести")
+
 
 from PyQt6.QtWidgets import QApplication
