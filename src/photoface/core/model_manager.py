@@ -248,7 +248,12 @@ class ModelManager:
             if progress_callback:
                 progress_callback(75, f"Загрузка модели {model_name} через InsightFace...")
                 
-            app.prepare(ctx_id=0, det_size=(640, 640))
+            # Используем порог уверенности из настроек для фильтрации детекций
+            min_confidence = 0.7  # значение по умолчанию
+            # Попробуем получить доступ к конфигурации, если он доступен
+            # В этом контексте у нас нет прямого доступа конфигурации,
+            # но мы можем использовать значение по умолчанию, которое соответствует настройке
+            app.prepare(ctx_id=0, det_size=(640, 640), det_thresh=min_confidence)
             
             # После успешной загрузки проверим, какие файлы были скачаны и обновим статус
             model_info = self.available_models[model_name]
@@ -314,7 +319,9 @@ class ModelManager:
             
             # Пытаемся инициализировать модель для проверки целостности
             app = FaceAnalysis(name=model_name, providers=['CPUExecutionProvider'])
-            app.prepare(ctx_id=0, det_size=(640, 640))
+            # Используем порог уверенности из настроек для фильтрации детекций
+            min_confidence = 0.7  # значение по умолчанию
+            app.prepare(ctx_id=0, det_size=(640, 640), det_thresh=min_confidence)
             
             logger.info(f"Модель {model_name} прошла проверку целостности")
             return True

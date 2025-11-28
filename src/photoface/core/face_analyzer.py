@@ -43,7 +43,9 @@ class FaceAnalyzer:
             )
             
             # Подготовка модели
-            self.model.prepare(ctx_id=0, det_size=(640, 640))
+            # Используем порог уверенности из настроек для фильтрации детекций
+            min_confidence = self.config.get('scan.min_face_confidence', 0.7) if self.config else 0.7
+            self.model.prepare(ctx_id=0, det_size=(640, 640), det_thresh=min_confidence)
             
             self.initialized = True
             logger.info("Модель распознавания лиц успешно инициализирована")
