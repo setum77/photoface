@@ -32,8 +32,7 @@ class Config:
             },
             'export': {
                 'last_output_path': '',
-                'create_info_files': True,
-                'preserve_folder_structure': False
+                'create_info_files': True
             },
             'editor': {
                 'external_editor_path': '',
@@ -81,6 +80,7 @@ class Config:
             try:
                 # Рекурсивно сохраняем все настройки в базу данных
                 self._save_dict_to_db('', self.settings)
+                logger.info("Настройки успешно сохранены в базу данных")
             except Exception as e:
                 logger.error(f"Ошибка сохранения настроек в базу данных: {e}")
         else:
@@ -163,6 +163,9 @@ class Config:
     
     def set(self, key: str, value: Any):
         """Устанавливает значение настройки"""
+        # Получаем старое значение для логирования
+        old_value = self.get(key)
+        
         keys = key.split('.')
         settings = self.settings
         
@@ -172,6 +175,8 @@ class Config:
             settings = settings[k]
         
         settings[keys[-1]] = value
+        logger.info(f"Изменена настройка '{key}': {old_value} -> {value}")
+        
         self.save_settings()
         
         # Также сохраняем в базу данных немедленно, если доступен db_manager
@@ -194,3 +199,62 @@ class Config:
     def set_last_output_path(self, path: str):
         """Устанавливает последний путь экспорта"""
         self.set('export.last_output_path', path)
+    
+    def get_available_image_editors(self) -> list:
+        """Возвращает список доступных редакторов изображений в системе"""
+        import os
+        import winreg
+        
+        editors = []
+        
+        # Популярные редакторы изображений и их возможные пути
+        common_editors = [
+            {"name": "Paint.NET", "path": r"C:\Program Files\Paint.NET\PaintDotNet.exe"},
+            {"name": "GIMP", "path": r"C:\Program Files\GIMP 2\bin\gimp-2.10.exe"},
+            {"name": "GIMP", "path": r"C:\Program Files (x86)\GIMP 2\bin\gimp-2.10.exe"},
+            {"name": "PaintShop Pro", "path": r"C:\Program Files\Corel\Corel PaintShop Pro\Corel PaintShop Pro.exe"},
+            {"name": "Photoshop", "path": r"C:\Program Files\Adobe\Adobe Photoshop*\Photoshop.exe"},
+            {"name": "IrfanView", "path": r"C:\Program Files\IrfanView\i_view64.exe"},
+            {"name": "IrfanView", "path": r"C:\Program Files (x86)\IrfanView\i_view32.exe"},
+            {"name": "XnView", "path": r"C:\Program Files\XnView\XnView.exe"},
+            {"name": "XnView", "path": r"C:\Program Files (x86)\XnView\XnView.exe"},
+        ]
+        
+        # Проверяем наличие установленных редакторов
+        for editor in common_editors:
+            if os.path.exists(editor["path"]):
+                editors.append({"name": editor["name"], "path": editor["path"]})
+            # Проверяем альтернативные пути для Photoshop
+            elif "*" in editor["path"]:
+                import glob
+                possible_paths = glob.glob(editor["path"])
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        editors.append({"name": editor["name"], "path": path})
+        
+        # Проверяем системный реестр Windows для поиска редакторов
+        try:
+            # Проверяем ассоциации файлов для изображений
+            image_extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff']
+            for ext in image_extensions:
+                try:
+                    with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, ext) as key:
+                        file_type = winreg.QueryValue(key, "")
+                        if file_type:
+                            with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, f"{file_type}\\shell\\open\\command") as cmd_key:
+                                cmd = winreg.QueryValue(cmd_key, "")
+                                # Извлекаем путь к программе из команды
+                                if cmd.startswith('"'):
+                                    exe_path = cmd.split('"')[1]
+                                else:
+                                    exe_path = cmd.split()[0]
+                                
+                                if exe_path and os.path.exists(exe_path) and exe_path not in [e["path"] for e in editors]:
+                                    editors.append({"name": os.path.basename(exe_path), "path": exe_path})
+                                break
+                except:
+                    continue
+        except:
+            pass  # Если не удается получить доступ к реестру, продолжаем без этого
+        
+        return editors

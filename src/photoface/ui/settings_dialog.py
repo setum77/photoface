@@ -185,6 +185,22 @@ class SettingsDialog(QDialog):
         editor_group = QGroupBox("Внешний редактор изображений")
         editor_layout = QFormLayout(editor_group)
         
+        # Добавляем выпадающий список для выбора редактора
+        from PyQt6.QtWidgets import QComboBox
+        self.editor_combo = QComboBox()
+        self.editor_combo.setMinimumWidth(300)
+        
+        # Кнопка для обновления списка редакторов
+        self.refresh_editors_btn = QPushButton("Обновить список")
+        self.refresh_editors_btn.clicked.connect(self.refresh_editors_list)
+        
+        editor_combo_layout = QHBoxLayout()
+        editor_combo_layout.addWidget(self.editor_combo)
+        editor_combo_layout.addWidget(self.refresh_editors_btn)
+        
+        editor_layout.addRow("Выберите редактор:", editor_combo_layout)
+        
+        # Поле для ручного ввода пути
         self.editor_path_edit = QLineEdit()
         self.editor_browse_btn = QPushButton("Обзор...")
         self.editor_browse_btn.clicked.connect(self.browse_editor)
@@ -220,6 +236,9 @@ class SettingsDialog(QDialog):
         layout.addWidget(perf_group)
         layout.addStretch()
         
+        # Загружаем список редакторов
+        self.refresh_editors_list()
+        
         return tab
         
     def create_scan_tab(self):
@@ -234,13 +253,33 @@ class SettingsDialog(QDialog):
         self.similarity_threshold_spin.setRange(0.1, 0.99)
         self.similarity_threshold_spin.setSingleStep(0.05)
         self.similarity_threshold_spin.setDecimals(2)
+        
+        # Добавляем пояснение к порогу схожести
+        similarity_explanation = QLabel(
+            "Порог схожести: Определяет, насколько похожи должны быть лица, чтобы считаться одним и тем же человеком. "
+            "Более высокое значение означает более строгое сравнение (меньше ложных совпадений, но больше пропущенных)."
+        )
+        similarity_explanation.setWordWrap(True)
+        similarity_explanation.setStyleSheet("font-size: 9px; color: #666;")
+        
         recognition_layout.addRow("Порог схожести:", self.similarity_threshold_spin)
+        recognition_layout.addRow("", similarity_explanation)
         
         self.min_confidence_spin = QDoubleSpinBox()
         self.min_confidence_spin.setRange(0.1, 0.99)
         self.min_confidence_spin.setSingleStep(0.05)
         self.min_confidence_spin.setDecimals(2)
+        
+        # Добавляем пояснение к минимальному качеству
+        confidence_explanation = QLabel(
+            "Минимальное качество: Определяет минимальное качество обнаружения лица. "
+            "Более высокое значение означает, что будут отфильтрованы лица низкого качества (размытые, плохо освещенные)."
+        )
+        confidence_explanation.setWordWrap(True)
+        confidence_explanation.setStyleSheet("font-size: 9px; color: #666;")
+        
         recognition_layout.addRow("Минимальное качество:", self.min_confidence_spin)
+        recognition_layout.addRow("", confidence_explanation)
         
         self.auto_cluster_check = QCheckBox("Автоматическая группировка после сканирования")
         recognition_layout.addRow("", self.auto_cluster_check)
@@ -304,9 +343,6 @@ class SettingsDialog(QDialog):
         self.create_info_check = QCheckBox("Создавать информационные файлы")
         export_layout.addRow("", self.create_info_check)
         
-        self.preserve_structure_check = QCheckBox("Сохранять структуру папок")
-        export_layout.addRow("", self.preserve_structure_check)
-        
         layout.addWidget(export_group)
         layout.addStretch()
         
@@ -315,12 +351,49 @@ class SettingsDialog(QDialog):
     def browse_editor(self):
         """Открывает диалог выбора редактора"""
         editor_path, _ = QFileDialog.getOpenFileName(
-            self, "Выберите программу для редактирования изображений", 
+            self, "Выберите программу для редактирования изображений",
             self.editor_path_edit.text(),
             "Программы (*.exe);;Все файлы (*.*)"
         )
         if editor_path:
             self.editor_path_edit.setText(editor_path)
+            # Обновляем выбор в комбобоксе, если этот редактор есть в списке
+            for i in range(self.editor_combo.count()):
+                if self.editor_combo.itemData(i) == editor_path:
+                    self.editor_combo.setCurrentIndex(i)
+                    break
+            
+    def refresh_editors_list(self):
+        """Обновляет список доступных редакторов"""
+        # Очищаем текущий список
+        self.editor_combo.clear()
+        
+        # Добавляем "Не выбран" как первый элемент
+        self.editor_combo.addItem("Не выбран", "")
+        
+        # Получаем список доступных редакторов из конфигурации
+        available_editors = self.config.get_available_image_editors()
+        
+        # Добавляем найденные редакторы в список
+        for editor in available_editors:
+            self.editor_combo.addItem(editor["name"], editor["path"])
+        
+        # Добавляем текущий путь, если он не в списке доступных редакторов
+        current_path = self.config.get_external_editor_path()
+        if current_path and not any(editor["path"] == current_path for editor in available_editors):
+            self.editor_combo.addItem(f"Другой: {os.path.basename(current_path)}", current_path)
+        
+        # Устанавливаем текущий выбранный элемент
+        current_index = -1
+        for i in range(self.editor_combo.count()):
+            if self.editor_combo.itemData(i) == current_path:
+                current_index = i
+                break
+        
+        if current_index >= 0:
+            self.editor_combo.setCurrentIndex(current_index)
+        else:
+            self.editor_combo.setCurrentIndex(0)
             
     def load_settings(self):
         """Загружает настройки в UI"""
@@ -347,13 +420,18 @@ class SettingsDialog(QDialog):
         
         # Настройки экспорта
         self.create_info_check.setChecked(self.config.get('export.create_info_files', True))
-        self.preserve_structure_check.setChecked(self.config.get('export.preserve_folder_structure', False))
         
     def apply_settings(self):
         """Применяет настройки"""
         try:
             # Общие настройки
-            self.config.set_external_editor_path(self.editor_path_edit.text())
+            # Используем путь из комбобокса, если выбран, иначе из текстового поля
+            selected_editor_path = self.editor_combo.currentData()
+            if selected_editor_path:
+                self.config.set_external_editor_path(selected_editor_path)
+            else:
+                self.config.set_external_editor_path(self.editor_path_edit.text())
+                
             self.config.set('editor.open_after_edit', self.open_after_edit_check.isChecked())
             self.config.set('performance.thumbnail_size', self.thumbnail_size_spin.value())
             self.config.set('performance.max_threads', self.max_threads_spin.value())
@@ -375,7 +453,6 @@ class SettingsDialog(QDialog):
             
             # Настройки экспорта
             self.config.set('export.create_info_files', self.create_info_check.isChecked())
-            self.config.set('export.preserve_folder_structure', self.preserve_structure_check.isChecked())
             
             QMessageBox.information(self, "Успех", "Настройки сохранены")
             
