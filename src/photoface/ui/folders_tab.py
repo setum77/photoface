@@ -335,34 +335,72 @@ class FoldersTab(QWidget):
             QMessageBox.information(self, "Информация", "Сканирование уже выполняется")
             return
         
-        folder_id = None
-        if selected_folder:
-            # Сканировать только выбранную папку
-            selected_indexes = self.folders_tree.selectedIndexes()
-            if not selected_indexes:
-                QMessageBox.warning(self, "Внимание", "Выберите папку для сканирования")
-                return
-            index = selected_indexes[0]
-            folder_id = self.folders_model.data(index, Qt.ItemDataRole.UserRole + 1)
+        # Получаем информацию о настройках перед сканированием
+        model_name = self.config.get('scan.face_model_name', 'buffalo_l')
+        min_confidence = self.config.get('scan.min_face_confidence', 0.7)
         
-        # Настройка UI для сканирования
-        self.scan_btn.setEnabled(False)
-        self.cancel_scan_btn.setEnabled(True)
-        self.status_label.setText("Сканирование...")
+        # Показываем диалог с информацией о сканировании
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Подтверждение сканирования")
+        dialog_layout = QVBoxLayout(dialog)
         
-        # Запуск сканирования
-        if self.scan_manager.start_scan(folder_id):
-            # Подключаем сигналы к текущей задаче
-            task = self.scan_manager.current_task
-            task.signals.progress_updated.connect(self.scan_progress_updated)
-            task.signals.scan_finished.connect(self.scan_finished)
-            task.signals.error_occurred.connect(self.on_scan_error)
+        # Информация о параметрах сканирования
+        info_label = QLabel(
+            f"Будет выполнено сканирование с следующими параметрами:\n\n"
+            f"• Модель распознавания: {model_name}\n"
+            f"• Минимальное качество обнаружения: {min_confidence}\n\n"
+            f"Процесс может занять продолжительное время в зависимости от количества изображений."
+        )
+        info_label.setWordWrap(True)
+        dialog_layout.addWidget(info_label)
+        
+        # Кнопки
+        buttons_layout = QHBoxLayout()
+        settings_btn = QPushButton("В настройки")
+        cancel_btn = QPushButton("Отмена")
+        continue_btn = QPushButton("Продолжить")
+        
+        buttons_layout.addWidget(settings_btn)
+        buttons_layout.addWidget(cancel_btn)
+        buttons_layout.addWidget(continue_btn)
+        dialog_layout.addLayout(buttons_layout)
+        
+        # Подключаем действия к кнопкам
+        settings_btn.clicked.connect(lambda: self.open_settings())
+        cancel_btn.clicked.connect(dialog.reject)
+        continue_btn.clicked.connect(dialog.accept)
+        
+        # Показываем диалог и продолжаем только если нажата "Продолжить"
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            folder_id = None
+            if selected_folder:
+                # Сканировать только выбранную папку
+                selected_indexes = self.folders_tree.selectedIndexes()
+                if not selected_indexes:
+                    QMessageBox.warning(self, "Внимание", "Выберите папку для сканирования")
+                    return
+                index = selected_indexes[0]
+                folder_id = self.folders_model.data(index, Qt.ItemDataRole.UserRole + 1)
             
-            # Показываем прогресс-диалог
-            self.progress_dialog.setValue(0)
-            self.progress_dialog.show()
-        else:
-            QMessageBox.warning(self, "Ошибка", "Не удалось начать сканирование")
+            # Настройка UI для сканирования
+            self.scan_btn.setEnabled(False)
+            self.cancel_scan_btn.setEnabled(True)
+            self.status_label.setText("Сканирование...")
+            
+            # Запуск сканирования
+            if self.scan_manager.start_scan(folder_id):
+                # Подключаем сигналы к текущей задаче
+                task = self.scan_manager.current_task
+                task.signals.progress_updated.connect(self.scan_progress_updated)
+                task.signals.scan_finished.connect(self.scan_finished)
+                task.signals.error_occurred.connect(self.on_scan_error)
+                
+                # Показываем прогресс-диалог
+                self.progress_dialog.setValue(0)
+                self.progress_dialog.show()
+            else:
+                QMessageBox.warning(self, "Ошибка", "Не удалось начать сканирование")
 
     def cancel_scanning(self):
         """Отменяет текущее сканирование"""
@@ -541,5 +579,11 @@ class FoldersTab(QWidget):
             QMessageBox.information(self, "Успех", "Данные очищены")
             self.load_folders()
 
-# from PyQt6.QtWidgets import QApplication
-# from PyQt6.QtCore import QSize
+    def open_settings(self):
+        """Открывает диалог настроек"""
+        # Импортируем здесь, чтобы избежать циклических импортов
+        from src.photoface.ui.settings_dialog import SettingsDialog
+        settings_dialog = SettingsDialog(self.config)
+        settings_dialog.exec()
+        # После закрытия настроек обновляем конфигурацию в scan_manager
+        self.scan_manager.update_config(self.config)

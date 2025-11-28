@@ -217,7 +217,12 @@ class ScanManager:
 
         self.current_task = ScanTask(self.db_manager, self.face_analyzer, folder_id)
         self.thread_pool.start(self.current_task)
-        logger.info("Запущено новое сканирование")
+        
+        # Получаем параметры сканирования из конфигурации для логирования
+        model_name = self.config.get('scan.face_model_name', 'buffalo_l') if self.config else 'buffalo_l'
+        min_confidence = self.config.get('scan.min_face_confidence', 0.7) if self.config else 0.7
+        
+        logger.info(f"Запущено новое сканирование с параметрами: модель={model_name}, минимальная уверенность={min_confidence}")
         return True
 
     def cancel_scan(self):
