@@ -137,47 +137,71 @@ class PersonFaceBlockWidget(QWidget):
         self.init_ui()
         
     def init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(5, 5, 5, 5)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)  # Убираем отступы для всего виджета
+        main_layout.setSpacing(0)  # Убираем промежутки между частями
         
-        # Заголовок блока
-        header_layout = QHBoxLayout()
+        # Header - содержит имя персоны и управляющие кнопки
+        self.header_widget = QWidget()
+        self.header_widget.setFixedHeight(80)  # Фиксированная высота 80px
+        self.header_widget.setStyleSheet("background-color: rgb(235, 235, 235);")  # Серый фон
+        header_layout = QHBoxLayout(self.header_widget)
+        header_layout.setContentsMargins(5, 5, 5, 5)
         
         # Имя персоны
         self.name_label = QLabel(self.person_name)
         font = self.name_label.font()
         font.setBold(True)
-        font.setPointSize(12)  # Увеличиваем размер шрифта
+        font.setPointSize(22)  # Размер шрифта 22 пункта
         self.name_label.setFont(font)
-        self.name_label.setStyleSheet("color: #000080;")  # Темно-синий цвет
-        header_layout.addWidget(self.name_label)
+        
+        # Устанавливаем цвет шрифта в зависимости от статуса персоны
+        if self.is_confirmed:  # Подтвержденная персона
+            self.name_label.setStyleSheet("color: rgb(0, 140, 16);")  # Зеленый цвет
+        elif self.person_name == 'not recognized':  # Не распознанная персона
+            self.name_label.setStyleSheet("color: rgb(0, 0);")  # Черный цвет
+        else:  # Неподтвержденная персона
+            self.name_label.setStyleSheet("color: rgb(0, 7, 140);")  # Синий цвет
+            
+        # Создаем промежуточный виджет для добавления отступа
+        name_container = QWidget()
+        name_layout = QHBoxLayout(name_container)
+        name_layout.setContentsMargins(50, 0, 0, 0)  # Отступ 50px от левого края
+        name_layout.addWidget(self.name_label)
+        name_layout.addStretch()  # Добавляем растягивающийся элемент для правильного выравнивания
+        
+        header_layout.addWidget(name_container)
+        
+        # Создаем контейнер для кнопок, чтобы выровнять их по правому краю
+        buttons_container = QWidget()
+        buttons_layout = QHBoxLayout(buttons_container)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
         
         # Кнопка "Переименовать"
         rename_btn = QPushButton("Переименовать")
         rename_btn.clicked.connect(lambda: self.rename_person.emit(self.person_id))
-        header_layout.addWidget(rename_btn)
+        buttons_layout.addWidget(rename_btn)
         
         # Кнопка "Подтвердить все лица" - только для подтвержденных персон
         if self.is_confirmed:
             confirm_all_btn = QPushButton("Подтвердить все лица")
             confirm_all_btn.clicked.connect(lambda: self.confirm_all_faces.emit(self.person_id))
-            header_layout.addWidget(confirm_all_btn)
+            buttons_layout.addWidget(confirm_all_btn)
         
         # Кнопка "Удалить персону"
         delete_btn = QPushButton("Удалить персону")
         delete_btn.clicked.connect(lambda: self.delete_person.emit(self.person_id))
-        header_layout.addWidget(delete_btn)
+        buttons_layout.addWidget(delete_btn)
         
-        # Добавляем растягивающийся элемент для выравнивания кнопок по правому краю
-        header_layout.addStretch()
+        header_layout.addWidget(buttons_container)
         
-        layout.addLayout(header_layout)
+        main_layout.addWidget(self.header_widget)
         
-        # Разделительная линия
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        line.setFrameShadow(QFrame.Shadow.Sunken)
-        layout.addWidget(line)
+        # Body - содержит миниатюры лиц
+        self.body_widget = QWidget()
+        self.body_widget.setStyleSheet("background-color: white;")  # Белый фон
+        body_layout = QVBoxLayout(self.body_widget)
+        body_layout.setContentsMargins(5, 5, 5, 5)
         
         # Сетка для миниатюр лиц
         self.faces_layout = QGridLayout()
@@ -206,9 +230,13 @@ class PersonFaceBlockWidget(QWidget):
                 col = 0
                 row += 1
         
-        layout.addLayout(self.faces_layout)
+        body_layout.addLayout(self.faces_layout)
         
-        # Устанавливаем политику размера для "резиновости"
+        main_layout.addWidget(self.body_widget)
+        
+        # Устанавливаем политику размера для "резиновости" - body должен растягиваться
+        self.header_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.body_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         
     def on_face_confirmed(self, face_id):
@@ -642,6 +670,14 @@ class FacesTab(QWidget):
             self.person_blocks[person_id] = person_block
             
             row += 1
+            
+            # Добавляем зазор 25px между блоками разных персон
+            if row < len(sorted_persons):
+                spacer = QFrame()
+                spacer.setFixedHeight(25)
+                spacer.setStyleSheet("background-color: transparent;")  # Прозрачный фон
+                self.faces_layout.addWidget(spacer, row, 0)
+                row += 1
         
         # Если нет персон, показываем сообщение
         if row == 0:
