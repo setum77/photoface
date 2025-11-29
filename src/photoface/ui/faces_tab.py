@@ -286,6 +286,10 @@ class FacesTab(QWidget):
         self.persons_list.clicked.connect(self.on_person_selected)
         self.persons_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.persons_list.customContextMenuRequested.connect(self.show_person_context_menu)
+        self.persons_list.doubleClicked.connect(self.on_person_double_clicked)
+        self.persons_list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # Разрешаем получение фокуса и клавиатурных событий
+        # Обработка нажатия клавиш для списка персон
+        self.persons_list.keyPressEvent = self.persons_keyPressEvent
         
         left_layout.addWidget(self.persons_list)
         
@@ -390,6 +394,36 @@ class FacesTab(QWidget):
         person_id = self.persons_model.data(index, Qt.ItemDataRole.UserRole)
         self.current_person_id = person_id
         self.load_person_faces(person_id)
+        
+    def on_person_double_clicked(self, index):
+        """Обрабатывает двойной клик по персоне - вызывает переименование"""
+        person_id = self.persons_model.data(index, Qt.ItemDataRole.UserRole)
+        person_name = self.persons_model.data(index, Qt.ItemDataRole.UserRole + 1)
+        self.rename_person(person_id, person_name)
+        
+    def persons_keyPressEvent(self, event):
+        """Обработка нажатия клавиш для списка персон"""
+        if event.key() == Qt.Key.Key_F2:
+            # Переименование персоны
+            selected_indexes = self.persons_list.selectedIndexes()
+            if selected_indexes:
+                index = selected_indexes[0]
+                person_id = self.persons_model.data(index, Qt.ItemDataRole.UserRole)
+                person_name = self.persons_model.data(index, Qt.ItemDataRole.UserRole + 1)
+                self.rename_person(person_id, person_name)
+        elif event.key() == Qt.Key.Key_Delete:
+            # Удаление персоны
+            selected_indexes = self.persons_list.selectedIndexes()
+            if selected_indexes:
+                index = selected_indexes[0]
+                person_id = self.persons_model.data(index, Qt.ItemDataRole.UserRole)
+                person_name = self.persons_model.data(index, Qt.ItemDataRole.UserRole + 1)
+                # Не даем удалить "not recognized"
+                if person_name != 'not recognized':
+                    self.delete_person(person_id)
+        else:
+            # Вызываем стандартный обработчик для остальных клавиш
+            super(QListView, self.persons_list).keyPressEvent(event)
         
     def load_person_faces(self, person_id):
         """Загружает лица выбранной персоны"""
@@ -497,8 +531,10 @@ class FacesTab(QWidget):
                 if self.db_manager.move_face_to_person(face_id, not_recognized_id):
                     # Устанавливаем is_person = 0 для лица, которое перемещается в "not recognized"
                     self.db_manager.set_face_person_status(face_id, 0)
-                    QMessageBox.information(self, "Успех", "Лицо убрано из персоны")
                     self.refresh_data()
+                    # Обновляем отображение лиц для текущей персоны, чтобы у персоны остались только прикрепленные лица
+                    if self.current_person_id:
+                        self.load_person_faces(self.current_person_id)
                     self.needs_refresh.emit()
                     
     def show_person_context_menu(self, position):
@@ -514,16 +550,17 @@ class FacesTab(QWidget):
             # Не показываем "Переименовать" и "Подтвердить все лица" для категории "not recognized"
             if person_name != 'not recognized':
                 rename_action = QAction("Переименовать", self)
-                rename_action.setShortcut("F2")  # Горячая клавиша для переименования
                 rename_action.triggered.connect(lambda: self.rename_person(person_id, person_name))
+                # Убираем горячую клавишу из контекстного меню, так как она обрабатывается в persons_keyPressEvent
                 menu.addAction(rename_action)
                 
-                if not is_confirmed:
+                if is_confirmed:  # Команда "Подтвердить все лица" теперь только у подтвержденных персон
                     confirm_all_faces_action = QAction("Подтвердить все лица", self)
                     confirm_all_faces_action.triggered.connect(lambda: self.confirm_all_faces(person_id))
                     menu.addAction(confirm_all_faces_action)
             
             delete_action = QAction("Удалить персону", self)
+            delete_action.setShortcut("Del")  # Добавляем горячую клавишу для удаления
             delete_action.triggered.connect(lambda: self.delete_person(person_id))
             menu.addAction(delete_action)
             
@@ -578,11 +615,22 @@ class FacesTab(QWidget):
             self.needs_refresh.emit()
             
     def confirm_all_faces(self, person_id):
-        """Подтверждает все лица для персоны"""
-        # Обновляем статус подтверждения персоны
-        self.db_manager.confirm_person(person_id)
+        """Устанавливает is_person = 1 для всех лиц, прикрепленных к персоне"""
+        # Получаем все лица для персоны
+        person_faces = self.db_manager.get_person_faces(person_id)
+        
+        # Устанавливаем is_person = 1 для каждого лица
+        for face_data in person_faces:
+            face_id = face_data[0]  # первый элемент - это face_id
+            self.db_manager.set_face_person_status(face_id, 1)
+        
         self.refresh_data()
         self.needs_refresh.emit()
+        
+        # Обновляем отображение лиц для текущей персоны, чтобы обновить значки статусов
+        if self.current_person_id:
+            self.load_person_faces(self.current_person_id)
+        
         QMessageBox.information(self, "Успех", "Все лица подтверждены")
             
     def delete_person(self, person_id):
@@ -598,7 +646,7 @@ class FacesTab(QWidget):
             if not_recognized_id:
                 # Перемещаем все лица
                 faces = self.db_manager.get_person_faces(person_id)
-                for face_id, _, _, _, _, _, _, _, _ in faces:
+                for face_id, _, _, _, _, _, _, _ in faces:
                     self.db_manager.move_face_to_person(face_id, not_recognized_id)
                 
                 # Удаляем пустую персону
@@ -609,6 +657,20 @@ class FacesTab(QWidget):
                 
                 self.refresh_data()
                 self.needs_refresh.emit()
+                
+                # Переносим фокус на персону "not recognized"
+                self.select_person_by_name('not recognized')
+                
+    def select_person_by_name(self, person_name):
+        """Выбирает персону по имени и отображает её лица"""
+        for row in range(self.persons_model.rowCount()):
+            index = self.persons_model.index(row, 0)
+            if self.persons_model.data(index, Qt.ItemDataRole.UserRole + 1) == person_name:
+                self.persons_list.setCurrentIndex(index)
+                person_id = self.persons_model.data(index, Qt.ItemDataRole.UserRole)
+                self.current_person_id = person_id
+                self.load_person_faces(person_id)
+                break
                 
     def delete_empty_persons(self):
         """Удаляет персоны без фотографий"""
