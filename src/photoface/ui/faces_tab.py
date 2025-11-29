@@ -630,8 +630,6 @@ class FacesTab(QWidget):
         # Обновляем отображение лиц для текущей персоны, чтобы обновить значки статусов
         if self.current_person_id:
             self.load_person_faces(self.current_person_id)
-        
-        QMessageBox.information(self, "Успех", "Все лица подтверждены")
             
     def delete_person(self, person_id):
         """Удаляет персону (перемещает все лица в not recognized)"""
