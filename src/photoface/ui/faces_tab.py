@@ -646,7 +646,7 @@ class FacesTab(QWidget):
             if not_recognized_id:
                 # Перемещаем все лица
                 faces = self.db_manager.get_person_faces(person_id)
-                for face_id, _, _, _, _, _, _, _ in faces:
+                for face_id, _, _, _, _, _, _, _, _ in faces:
                     self.db_manager.move_face_to_person(face_id, not_recognized_id)
                 
                 # Удаляем пустую персону
