@@ -676,15 +676,17 @@ class FacesTab(QWidget):
         self.faces_stats_label.setText(stats_text)
                 
     def scroll_to_person_block(self, person_id):
-        """Прокручивает к блоку указанной персоны"""
+        """Прокручивает к блоку указанной персоны, размещая его вверху области просмотра"""
         if person_id in self.person_blocks:
             person_block = self.person_blocks[person_id]
             
-            # Получаем координаты блока
-            block_rect = person_block.geometry()
+            # Получаем позицию блока в виджете
+            block_pos = person_block.pos()
+            block_y = block_pos.y()
             
-            # Прокручиваем область прокрутки к блоку
-            self.scroll_area.ensureWidgetVisible(person_block)
+            # Прокручиваем к позиции блока с небольшим отступом сверху, чтобы блок не прилипал к верхней границе
+            scroll_value = max(0, block_y - 20)  # 20 пикселей отступа сверху
+            self.scroll_area.verticalScrollBar().setValue(scroll_value)
             
     def on_face_confirmed(self, face_id):
         """Обрабатывает подтверждение лица - устанавливает is_person = 1 или открывает диалог редактирования для not recognized"""
