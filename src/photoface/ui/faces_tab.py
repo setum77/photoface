@@ -42,14 +42,24 @@ class FaceThumbnailWidget(QFrame):
         layout.setContentsMargins(2, 2, 2, 2)
         layout.setSpacing(2)
         
+        # Создаем подкласс для thumbnail_label с обработкой двойного клика
+        class ThumbnailLabel(QLabel):
+            double_clicked = pyqtSignal()
+            
+            def mouseDoubleClickEvent(self, event):
+                self.double_clicked.emit()
+        
         # Миниатюра лица
-        self.thumbnail_label = QLabel()
+        self.thumbnail_label = ThumbnailLabel()
         self.thumbnail_label.setFixedSize(120, 120)
         self.thumbnail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.thumbnail_label.setStyleSheet("border: 1px solid #ccc; background-color: white;")
         
         # Загружаем и обрезаем миниатюру лица
         self.load_face_thumbnail()
+        
+        # Подключаем сигнал двойного клика
+        self.thumbnail_label.double_clicked.connect(self.thumbnail_double_clicked)
         
         # Кнопки действий
         buttons_layout = QHBoxLayout()
@@ -78,9 +88,6 @@ class FaceThumbnailWidget(QFrame):
         
         layout.addWidget(self.thumbnail_label)
         layout.addLayout(buttons_layout)
-        
-        # Обработка двойного клика
-        self.thumbnail_label.mouseDoubleClickEvent = self.thumbnail_double_clicked
         
         self.setFrameStyle(QFrame.Shape.StyledPanel)
         self.setStyleSheet("QFrame { border: 1px solid #ddd; border-radius: 3px; }")
@@ -115,7 +122,7 @@ class FaceThumbnailWidget(QFrame):
         except:
             return None
             
-    def thumbnail_double_clicked(self, event):
+    def thumbnail_double_clicked(self):
         """Обрабатывает двойной клик на миниатюре"""
         self.face_double_clicked.emit(self.image_path)
 class PersonFaceBlockWidget(QWidget):
