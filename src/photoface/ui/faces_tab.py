@@ -11,6 +11,13 @@ from src.photoface.core.database import DatabaseManager
 from src.photoface.core.face_clusterer import FaceClusterer
 from src.photoface.ui.photo_viewer import FaceEditDialog
 from src.photoface.utils.helpers import generate_thumbnail, pil_to_pixmap
+from src.photoface.utils.face_thumbnail_cache import FaceThumbnailCache
+
+# Глобальный кэш миниатюр лиц (инициализируется в FacesTab)
+face_thumbnail_cache = None
+
+# Глобальный кэш миниатюр лиц
+face_thumbnail_cache = FaceThumbnailCache(cache_size=1000)
 
 class FaceThumbnailWidget(QFrame):
     """Виджет для отображения миниатюры лица с кнопками действий"""
@@ -19,13 +26,15 @@ class FaceThumbnailWidget(QFrame):
     face_rejected = pyqtSignal(int)   # face_id
     face_double_clicked = pyqtSignal(str) # image_path
     
-    def __init__(self, face_id, image_path, bbox, confidence, is_person_status=None, parent=None):
+    def __init__(self, face_id, image_path, bbox, confidence, is_person_status=None, parent=None, thumbnail_cache=None):
         super().__init__(parent)
         self.face_id = face_id
         self.image_path = image_path
         self.bbox = bbox
         self.confidence = confidence
         self.is_person_status = is_person_status  # 1 - подтверждено, 0 - не подтверждено
+        # Используем переданный кэш или глобальный
+        self.thumbnail_cache = thumbnail_cache or face_thumbnail_cache
         self.init_ui()
         
     def init_ui(self):
@@ -91,29 +100,11 @@ class FaceThumbnailWidget(QFrame):
             self.confirm_btn.setStyleSheet("QToolButton { border-radius: 4px; }")
         
     def load_face_thumbnail(self):
-        """Загружает и обрезает миниатюру лица"""
-        try:
-            # Открываем оригинальное изображение
-            from PIL import Image
-            with Image.open(self.image_path) as orig_img:
-                # Получаем координаты области лица
-                x1, y1, x2, y2 = self.bbox
-
-                # Убедимся, что координаты - числа
-                x1, y1, x2, y2 = float(x1), float(y1), float(x2), float(y2)
-                
-                # Обрезаем область лица из оригинального изображения
-                face_crop = orig_img.crop((int(x1), int(y1), int(x2), int(y2)))
-                
-                # Масштабируем до размера миниатюры
-                face_thumb = face_crop.resize((120, 120))
-                
-                pixmap = pil_to_pixmap(face_thumb)
-                self.thumbnail_label.setPixmap(pixmap)
-        except Exception as e:
-            print(f"Ошибка загрузки миниатюры лица: {e}")
-            import traceback
-            print(f"Трассировка: {traceback.format_exc()}")
+        """Загружает миниатюру лица из кэша или создает новую"""
+        # Получаем миниатюру из кэша
+        pixmap = self.thumbnail_cache.get_thumbnail(self.face_id, self.image_path, self.bbox, (120, 120))
+        if pixmap:
+            self.thumbnail_label.setPixmap(pixmap)
             
     def get_original_image_size(self):
         """Возвращает размер оригинального изображения"""
@@ -127,6 +118,128 @@ class FaceThumbnailWidget(QFrame):
     def thumbnail_double_clicked(self, event):
         """Обрабатывает двойной клик на миниатюре"""
         self.face_double_clicked.emit(self.image_path)
+class PersonFaceBlockWidget(QWidget):
+    """Виджет блока лица с заголовком и миниатюрами лиц персоны"""
+    
+    rename_person = pyqtSignal(int)  # person_id
+    confirm_all_faces = pyqtSignal(int)  # person_id
+    delete_person = pyqtSignal(int)  # person_id
+    person_selected = pyqtSignal(int)  # person_id
+    
+    def __init__(self, person_id, person_name, is_confirmed, faces, parent=None, thumbnail_cache=None):
+        super().__init__(parent)
+        self.person_id = person_id
+        self.person_name = person_name
+        self.is_confirmed = is_confirmed
+        self.faces = faces
+        self.face_widgets = []
+        self.thumbnail_cache = thumbnail_cache  # Кэш миниатюр
+        self.init_ui()
+        
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        
+        # Заголовок блока
+        header_layout = QHBoxLayout()
+        
+        # Имя персоны
+        self.name_label = QLabel(self.person_name)
+        font = self.name_label.font()
+        font.setBold(True)
+        self.name_label.setFont(font)
+        header_layout.addWidget(self.name_label)
+        
+        # Кнопка "Переименовать"
+        rename_btn = QPushButton("Переименовать")
+        rename_btn.clicked.connect(lambda: self.rename_person.emit(self.person_id))
+        header_layout.addWidget(rename_btn)
+        
+        # Кнопка "Подтвердить все лица" - только для подтвержденных персон
+        if self.is_confirmed:
+            confirm_all_btn = QPushButton("Подтвердить все лица")
+            confirm_all_btn.clicked.connect(lambda: self.confirm_all_faces.emit(self.person_id))
+            header_layout.addWidget(confirm_all_btn)
+        
+        # Кнопка "Удалить персону"
+        delete_btn = QPushButton("Удалить персону")
+        delete_btn.clicked.connect(lambda: self.delete_person.emit(self.person_id))
+        header_layout.addWidget(delete_btn)
+        
+        # Добавляем растягивающийся элемент для выравнивания кнопок по правому краю
+        header_layout.addStretch()
+        
+        layout.addLayout(header_layout)
+        
+        # Разделительная линия
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(line)
+        
+        # Сетка для миниатюр лиц
+        self.faces_layout = QGridLayout()
+        self.faces_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
+        # Добавляем миниатюры лиц
+        row, col = 0, 0
+        max_cols = 4
+        
+        for face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status in self.faces:
+            bbox = (x1, y1, x2, y2)
+            face_widget = FaceThumbnailWidget(
+                face_id, image_path, bbox, confidence, is_person_status, thumbnail_cache=self.thumbnail_cache
+            )
+            
+            # Подключаем сигналы
+            face_widget.face_confirmed.connect(self.on_face_confirmed)
+            face_widget.face_rejected.connect(self.on_face_rejected)
+            face_widget.face_double_clicked.connect(self.on_face_double_clicked)
+            
+            self.faces_layout.addWidget(face_widget, row, col)
+            self.face_widgets.append(face_widget)
+            
+            col += 1
+            if col >= max_cols:
+                col = 0
+                row += 1
+        
+        layout.addLayout(self.faces_layout)
+        
+        # Устанавливаем фиксированную высоту для заголовка
+        header_height = self.sizeHint().height() - self.faces_layout.sizeHint().height()
+        self.setMinimumHeight(header_height + 200)  # минимальная высота для отображения хотя бы нескольких лиц
+        
+    def on_face_confirmed(self, face_id):
+        """Обработка подтверждения лица"""
+        # Обновляем статус в базе данных
+        if self.parent() and hasattr(self.parent(), 'db_manager'):
+            self.parent().db_manager.set_face_person_status(face_id, 1)
+            # Обновляем интерфейс
+            self.parent().refresh_data()
+    
+    def on_face_rejected(self, face_id):
+        """Обработка отклонения лица"""
+        # Перемещаем лицо в not recognized
+        if self.parent() and hasattr(self.parent(), 'db_manager'):
+            not_recognized_id = self.parent().db_manager.get_person_by_name('not recognized')
+            if not_recognized_id:
+                self.parent().db_manager.move_face_to_person(face_id, not_recognized_id)
+                self.parent().db_manager.set_face_person_status(face_id, 0)
+                # Обновляем интерфейс
+                self.parent().refresh_data()
+    
+    def on_face_double_clicked(self, image_path):
+        """Обработка двойного клика по лицу"""
+        # Передаем сигнал выше
+        if self.parent() and hasattr(self.parent(), 'image_double_clicked'):
+            self.parent().image_double_clicked.emit(image_path)
+            
+    def mousePressEvent(self, event):
+        """Обработка клика по блоку персоны"""
+        super().mousePressEvent(event)
+        # Вызываем сигнал выбора персоны
+        self.person_selected.emit(self.person_id)
 
 class PersonNameDialog(QDialog):
     """Диалог для ввода имени персоны с автодополнением"""
@@ -225,6 +338,11 @@ class FacesTab(QWidget):
         self.config = config
         self.face_clusterer = FaceClusterer(db_manager, config=config)
         self.current_person_id = None
+        self.person_blocks = {}  # Словарь для хранения блоков персон
+        # Инициализируем кэш миниатюр с db_manager
+        global face_thumbnail_cache
+        face_thumbnail_cache = FaceThumbnailCache(db_manager=db_manager, cache_size=1000)
+        self.thumbnail_cache = face_thumbnail_cache
         self.init_ui()
         
     def init_ui(self):
@@ -339,6 +457,7 @@ class FacesTab(QWidget):
     def refresh_data(self):
         """Обновляет данные в интерфейсе"""
         self.load_persons()
+        self.load_all_person_faces()  # Используем новую функцию для загрузки всех лиц
         self.update_stats()
         self.update_persons_stats()
         # Убираем вызов обновления старой статистики
@@ -436,7 +555,8 @@ class FacesTab(QWidget):
         """Обрабатывает выбор персоны"""
         person_id = self.persons_model.data(index, Qt.ItemDataRole.UserRole)
         self.current_person_id = person_id
-        self.load_person_faces(person_id)
+        # Прокручиваем к блоку выбранной персоны
+        self.scroll_to_person_block(person_id)
         
     def on_person_double_clicked(self, index):
         """Обрабатывает двойной клик по персоне - вызывает переименование"""
@@ -468,56 +588,77 @@ class FacesTab(QWidget):
             # Вызываем стандартный обработчик для остальных клавиш
             super(QListView, self.persons_list).keyPressEvent(event)
         
-    def load_person_faces(self, person_id):
-        """Загружает лица выбранной персоны"""
+    def load_all_person_faces(self):
+        """Загружает лица всех персон в виде блоков"""
         # Очищаем текущие лица
         for i in reversed(range(self.faces_layout.count())):
             widget = self.faces_layout.itemAt(i).widget()
             if widget:
                 widget.deleteLater()
-                
-        faces = self.db_manager.get_person_faces(person_id)
         
-        if not faces:
+        # Очищаем словарь блоков
+        self.person_blocks = {}
+        
+        # Получаем все персоны
+        persons = self.db_manager.get_person_stats()
+        
+        # Разделяем подтвержденные и неподтвержденные персоны
+        confirmed_persons = []
+        unconfirmed_persons = []
+        
+        for person_id, name, is_confirmed, face_count in persons:
+            if is_confirmed:
+                confirmed_persons.append((person_id, name, is_confirmed, face_count))
+            else:
+                unconfirmed_persons.append((person_id, name, is_confirmed, face_count))
+        
+        # Сортируем подтвержденные персоны по алфавиту
+        confirmed_persons.sort(key=lambda x: x[1].lower())  # Сортировка по имени (x[1])
+        # Неподтвержденные персоны оставляем в исходном порядке или можно тоже отсортировать по алфавиту
+        unconfirmed_persons.sort(key=lambda x: x[1].lower())  # Сортировка по имени (x[1])
+        
+        # Объединяем списки: сначала подтвержденные (отсортированные), затем неподтвержденные (отсортированные)
+        sorted_persons = confirmed_persons + unconfirmed_persons
+        
+        row = 0
+        for person_id, name, is_confirmed, face_count in sorted_persons:
+            # Получаем лица для персоны
+            faces = self.db_manager.get_person_faces(person_id)
+            
+            # Создаем блок для персоны
+            person_block = PersonFaceBlockWidget(person_id, name, is_confirmed, faces, parent=self, thumbnail_cache=self.thumbnail_cache)
+            
+            # Подключаем сигналы
+            person_block.rename_person.connect(self.rename_person)
+            person_block.confirm_all_faces.connect(self.confirm_all_faces)
+            person_block.delete_person.connect(self.delete_person)
+            person_block.person_selected.connect(self.on_person_block_selected)
+            
+            # Добавляем блок в макет
+            self.faces_layout.addWidget(person_block, row, 0)
+            
+            # Сохраняем ссылку на блок
+            self.person_blocks[person_id] = person_block
+            
+            row += 1
+        
+        # Если нет персон, показываем сообщение
+        if row == 0:
             no_faces_label = QLabel("Нет лиц для отображения")
             no_faces_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.faces_layout.addWidget(no_faces_label, 0, 0)
-            # Обновляем общую статистику по лицам
-            self.update_faces_stats(person_id)
-            return
-            
-        # Отображаем лица в сетке
-        row, col = 0, 0
-        max_cols = 4
-
-        # Определяем статус подтверждения персоны
-        person_confirmed = False
-        persons_stats = self.db_manager.get_person_stats()
-        for p_id, _, confirmed, _ in persons_stats:
-            if p_id == person_id:
-                person_confirmed = confirmed
-                break
         
-        for face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status in faces:
-            # Создаем кортеж bbox из отдельных координат
-            bbox = (x1, y1, x2, y2)
-            face_widget = FaceThumbnailWidget(
-                face_id, image_path, bbox, confidence, is_person_status
-            )
-            
-            face_widget.face_confirmed.connect(self.on_face_confirmed)
-            face_widget.face_rejected.connect(self.on_face_rejected)
-            face_widget.face_double_clicked.connect(self.image_double_clicked)
-            
-            self.faces_layout.addWidget(face_widget, row, col)
-            
-            col += 1
-            if col >= max_cols:
-                col = 0
-                row += 1
-                
-        # Обновляем общую статистику по лицам (не по персоне)
-        self.update_faces_stats(person_id)
+        # Обновляем общую статистику по лицам
+        self.update_faces_stats(None)
+        
+    def on_person_block_selected(self, person_id):
+        """Обработка выбора блока персоны"""
+        # Выбираем персону в левом списке
+        for row in range(self.persons_model.rowCount()):
+            index = self.persons_model.index(row, 0)
+            if self.persons_model.data(index, Qt.ItemDataRole.UserRole) == person_id:
+                self.persons_list.setCurrentIndex(index)
+                break
         
     def update_faces_stats(self, person_id):
         """Обновляет общую статистику по лицам (не по персоне)"""
@@ -533,6 +674,17 @@ class FacesTab(QWidget):
         stats_text = f"Всего лиц: {total_all_faces} | Подтвержденных: {total_confirmed_faces} | Не распределенных (группа 'not recognized'): {total_unrecognized_faces}"
         self.faces_stats_label.setText(stats_text)
                 
+    def scroll_to_person_block(self, person_id):
+        """Прокручивает к блоку указанной персоны"""
+        if person_id in self.person_blocks:
+            person_block = self.person_blocks[person_id]
+            
+            # Получаем координаты блока
+            block_rect = person_block.geometry()
+            
+            # Прокручиваем область прокрутки к блоку
+            self.scroll_area.ensureWidgetVisible(person_block)
+            
     def on_face_confirmed(self, face_id):
         """Обрабатывает подтверждение лица - устанавливает is_person = 1 или открывает диалог редактирования для not recognized"""
         # Получаем информацию о лице и связанной персоне
@@ -569,14 +721,10 @@ class FacesTab(QWidget):
                             # Устанавливаем is_person = 1 для этого лица
                             self.db_manager.set_face_person_status(face_id, 1)
                             self.refresh_data()
-                            if self.current_person_id:
-                                self.load_person_faces(self.current_person_id)
         else:
             # Просто устанавливаем is_person = 1 для подтвержденного лица
             if self.db_manager.set_face_person_status(face_id, 1):
                 self.refresh_data()
-                if self.current_person_id:
-                    self.load_person_faces(self.current_person_id)
         
     def on_face_rejected(self, face_id):
         """Обрабатывает отклонение лица - перемещает лицо в not recognized"""
@@ -594,9 +742,6 @@ class FacesTab(QWidget):
                     # Устанавливаем is_person = 0 для лица, которое перемещается в "not recognized"
                     self.db_manager.set_face_person_status(face_id, 0)
                     self.refresh_data()
-                    # Обновляем отображение лиц для текущей персоны, чтобы у персоны остались только прикрепленные лица
-                    if self.current_person_id:
-                        self.load_person_faces(self.current_person_id)
                     self.needs_refresh.emit()
                     
     def show_person_context_menu(self, position):
@@ -628,8 +773,16 @@ class FacesTab(QWidget):
             
             menu.exec(self.persons_list.viewport().mapToGlobal(position))
             
-    def rename_person(self, person_id, current_name):
+    def rename_person(self, person_id, current_name=None):
         """Переименовывает персону или сливает с существующей (предотвращает дубли)"""
+        # Если current_name не передан, получаем его из базы данных
+        if current_name is None:
+            persons = self.db_manager.get_person_stats()
+            for p_id, name, _, _ in persons:
+                if p_id == person_id:
+                    current_name = name
+                    break
+        
         dialog = PersonNameDialog(current_name, self.db_manager, person_id, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             new_name = dialog.get_name_and_target()[0]  # Только имя, игнор target_id
@@ -662,6 +815,8 @@ class FacesTab(QWidget):
                 print(f"[DEBUG] Успех: {success_msg}")
                 QMessageBox.information(self, "Успех", success_msg)
                 self.refresh_data()
+                # Прокручиваем к обновленному блоку персоны
+                self.scroll_to_person_block(person_id)
                 self.needs_refresh.emit()
                 
             except Exception as e:
@@ -688,10 +843,6 @@ class FacesTab(QWidget):
         
         self.refresh_data()
         self.needs_refresh.emit()
-        
-        # Обновляем отображение лиц для текущей персоны, чтобы обновить значки статусов
-        if self.current_person_id:
-            self.load_person_faces(self.current_person_id)
             
     def delete_person(self, person_id):
         """Удаляет персону (перемещает все лица в not recognized)"""
@@ -722,14 +873,13 @@ class FacesTab(QWidget):
                 self.select_person_by_name('not recognized')
                 
     def select_person_by_name(self, person_name):
-        """Выбирает персону по имени и отображает её лица"""
+        """Выбирает персону по имени"""
         for row in range(self.persons_model.rowCount()):
             index = self.persons_model.index(row, 0)
             if self.persons_model.data(index, Qt.ItemDataRole.UserRole + 1) == person_name:
                 self.persons_list.setCurrentIndex(index)
                 person_id = self.persons_model.data(index, Qt.ItemDataRole.UserRole)
                 self.current_person_id = person_id
-                self.load_person_faces(person_id)
                 break
                 
     def delete_empty_persons(self):

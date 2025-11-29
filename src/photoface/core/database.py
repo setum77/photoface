@@ -79,7 +79,18 @@ class DatabaseManager:
                     FOREIGN KEY (person_id) REFERENCES persons (id) ON DELETE CASCADE
                 )
             ''')
-
+            
+            # Таблица для хранения миниатюр лиц
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS face_thumbnails (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    face_id INTEGER UNIQUE NOT NULL,
+                    thumbnail_data BLOB NOT NULL,
+                    created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (face_id) REFERENCES faces (id) ON DELETE CASCADE
+                )
+            ''')
+            
             # Таблица для альбомов (связь персона -> выходная папка)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS albums (
@@ -730,3 +741,53 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute("SELECT key, value FROM settings")
             return dict(cursor.fetchall())
+    
+    # Методы для работы с миниатюрами лиц
+    def save_face_thumbnail(self, face_id: int, thumbnail_data: bytes):
+        """Сохраняет миниатюру лица в базу данных"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('''
+                    INSERT OR REPLACE INTO face_thumbnails
+                    (face_id, thumbnail_data)
+                    VALUES (?, ?)
+                ''', (face_id, thumbnail_data))
+                conn.commit()
+                return cursor.rowcount > 0
+            except Exception as e:
+                logger.error(f"Ошибка при сохранении миниатюры для face_id {face_id}: {e}")
+                return False
+    
+    def get_face_thumbnail(self, face_id: int) -> Optional[bytes]:
+        """Получает миниатюру лица из базы данных"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('''
+                    SELECT thumbnail_data FROM face_thumbnails
+                    WHERE face_id = ?
+                ''', (face_id,))
+                result = cursor.fetchone()
+                return result[0] if result else None
+            except Exception as e:
+                logger.error(f"Ошибка при получении миниатюры для face_id {face_id}: {e}")
+                return None
+    
+    def delete_face_thumbnail(self, face_id: int):
+        """Удаляет миниатюру лица из базы данных"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                DELETE FROM face_thumbnails
+                WHERE face_id = ?
+            ''', (face_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+    
+    def clear_face_thumbnails(self):
+        """Очищает все миниатюры лиц из базы данных"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM face_thumbnails")
+            conn.commit()
