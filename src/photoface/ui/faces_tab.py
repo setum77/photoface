@@ -147,7 +147,9 @@ class PersonFaceBlockWidget(QWidget):
         self.name_label = QLabel(self.person_name)
         font = self.name_label.font()
         font.setBold(True)
+        font.setPointSize(12)  # Увеличиваем размер шрифта
         self.name_label.setFont(font)
+        self.name_label.setStyleSheet("color: #000080;")  # Темно-синий цвет
         header_layout.addWidget(self.name_label)
         
         # Кнопка "Переименовать"
@@ -206,9 +208,8 @@ class PersonFaceBlockWidget(QWidget):
         
         layout.addLayout(self.faces_layout)
         
-        # Устанавливаем фиксированную высоту для заголовка
-        header_height = self.sizeHint().height() - self.faces_layout.sizeHint().height()
-        self.setMinimumHeight(header_height + 200)  # минимальная высота для отображения хотя бы нескольких лиц
+        # Устанавливаем политику размера для "резиновости"
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         
     def on_face_confirmed(self, face_id):
         """Обработка подтверждения лица"""
