@@ -71,18 +71,18 @@ class FaceAnalyzer:
                 logger.error(f"Файл не существует: {image_path}")
                 return []
                 
-            # Загружаем изображение с помощью OpenCV
-            img = cv2.imread(image_path)
-            
-            if img is None:
-                logger.error(f"OpenCV не смог загрузить изображение: {image_path}")
-                try:
-                    from PIL import Image as PILImage
-                    pil_img = PILImage.open(image_path)
-                    img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-                    logger.info(f"Успешно загружено через PIL: {image_path}")
-                except Exception as pil_error:
-                    logger.error(f"PIL тоже не смог загрузить: {image_path}, ошибка: {pil_error}")
+            # Загружаем изображение с помощью PIL, чтобы избежать проблем с кириллическими символами в пути
+            try:
+                from PIL import Image as PILImage
+                pil_img = PILImage.open(image_path)
+                img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+                logger.debug(f"Успешно загружено через PIL: {image_path}")
+            except Exception as pil_error:
+                logger.error(f"PIL не смог загрузить: {image_path}, ошибка: {pil_error}")
+                # Пробуем использовать OpenCV как резервный вариант
+                img = cv2.imread(image_path)
+                if img is None:
+                    logger.error(f"OpenCV не смог загрузить изображение: {image_path}")
                     return []
             
             if img is None:
@@ -235,8 +235,18 @@ class FaceAnalyzer:
         """
         try:
             # Загружаем изображение
-            image = Image.open(image_path)
-            img_cv = cv2.imread(image_path)
+            try:
+                # Сначала пробуем через PIL, чтобы избежать проблем с кириллическими символами
+                from PIL import Image as PILImage
+                pil_img = PILImage.open(image_path)
+                img_cv = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+            except Exception as pil_error:
+                logger.error(f"Ошибка загрузки изображения через PIL в draw_faces_on_image: {image_path}, ошибка: {pil_error}")
+                # Резервный вариант - OpenCV
+                img_cv = cv2.imread(image_path)
+                if img_cv is None:
+                    logger.error(f"OpenCV не смог загрузить изображение: {image_path}")
+                    return None
             
             # Рисуем рамки для каждого лица
             for face in faces_info:
@@ -292,11 +302,18 @@ class FaceAnalyzer:
         try:
             print(f"=== ТЕСТ ДЕТЕКЦИИ ДЛЯ {image_path} ===")
             
-            # Загружаем изображение
-            img = cv2.imread(image_path)
-            if img is None:
-                print("Ошибка: не удалось загрузить изображение")
-                return []
+            # Загружаем изображение через PIL для поддержки кириллических символов в пути
+            try:
+                from PIL import Image as PILImage
+                pil_img = PILImage.open(image_path)
+                img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+            except Exception as pil_error:
+                print(f"Ошибка загрузки через PIL: {pil_error}")
+                # Резервный вариант - OpenCV
+                img = cv2.imread(image_path)
+                if img is None:
+                    print("Ошибка: не удалось загрузить изображение")
+                    return []
             
             height, width = img.shape[:2]
             print(f"Размер изображения: {width}x{height}")

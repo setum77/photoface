@@ -175,7 +175,24 @@ class Config:
             settings = settings[k]
         
         settings[keys[-1]] = value
-        logger.info(f"Изменена настройка '{key}': {old_value} -> {value}")
+        
+        # Безопасное логирование значений, которые могут содержать бинарные данные
+        def safe_repr(val):
+            if isinstance(val, bytes):
+                return f"<binary_data: {len(val)} bytes>"
+            elif isinstance(val, (list, tuple)) and any(isinstance(x, bytes) for x in val):
+                return [safe_repr(x) for x in val]
+            elif isinstance(val, dict) and any(isinstance(v, bytes) for v in val.values()):
+                return {k: safe_repr(v) for k, v in val.items()}
+            else:
+                return val
+        
+        # Применяем безопасное представление к значениям перед логированием
+        safe_old_value = safe_repr(old_value)
+        safe_new_value = safe_repr(value)
+        
+        # Логируем безопасно, передавая значения как аргументы
+        logger.info("Изменена настройка '%s': %s -> %s", key, safe_old_value, safe_new_value)
         
         self.save_settings()
         

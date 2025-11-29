@@ -257,14 +257,53 @@ class PhotoViewer(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.central_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
+    def _pil_to_qimage(self, pil_img):
+        """Конвертирует PIL Image в QImage"""
+        if pil_img.mode == "RGB":
+            # 3x8 бит на пиксель (24 бита на пиксель)
+            return self._rgb_to_qimage(pil_img)
+        elif pil_img.mode == "RGBA":
+            # 4x8 бит на пиксель (32 бита на пиксель)
+            return self._rgba_to_qimage(pil_img)
+        else:
+            # Конвертируем в RGB если не поддерживаемый режим
+            rgb_img = pil_img.convert("RGB")
+            return self._rgb_to_qimage(rgb_img)
+    
+    def _rgb_to_qimage(self, pil_img):
+        """Конвертирует RGB PIL Image в QImage"""
+        # Преобразуем PIL изображение в байтовый массив
+        data = pil_img.tobytes("raw", "RGB")
+        # Создаем QImage
+        qimage = QImage(data, pil_img.size[0], pil_img.size[1], QImage.Format.Format_RGB888)
+        return qimage
+        
+    def _rgba_to_qimage(self, pil_img):
+        """Конвертирует RGBA PIL Image в QImage"""
+        # Преобразуем PIL изображение в байтовый массив
+        data = pil_img.tobytes("raw", "RGBA")
+        # Создаем QImage
+        qimage = QImage(data, pil_img.size[0], pil_img.size[1], QImage.Format.Format_RGBA8888)
+        return qimage
+        
     def load_image(self, image_path):
         """Загружает изображение и лица"""
         if not os.path.exists(image_path):
             QMessageBox.warning(self, "Ошибка", "Файл не существует")
             return False
             
-        # Загружаем изображение
-        pixmap = QPixmap(image_path)
+        # Загружаем изображение через PIL для поддержки кириллических символов в пути
+        try:
+            from PIL import Image as PILImage
+            pil_img = PILImage.open(image_path)
+            # Конвертируем PIL изображение в QPixmap
+            qimage = self._pil_to_qimage(pil_img)
+            pixmap = QPixmap.fromImage(qimage)
+        except Exception as e:
+            print(f"Ошибка загрузки изображения через PIL: {e}")
+            # Резервный вариант - прямая загрузка QPixmap
+            pixmap = QPixmap(image_path)
+        
         if pixmap.isNull():
             QMessageBox.warning(self, "Ошибка", "Не удалось загрузить изображение")
             return False
