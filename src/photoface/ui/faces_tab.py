@@ -144,7 +144,7 @@ class PersonFaceBlockWidget(QWidget):
         # Header - содержит имя персоны и управляющие кнопки
         self.header_widget = QWidget()
         self.header_widget.setFixedHeight(80)  # Фиксированная высота 80px
-        self.header_widget.setStyleSheet("background-color: rgb(235, 235, 235);")  # Серый фон
+        self.header_widget.setStyleSheet("background-color: rgb(200, 200, 200);") # Серый фон
         header_layout = QHBoxLayout(self.header_widget)
         header_layout.setContentsMargins(5, 5, 5, 5)
         
@@ -424,7 +424,7 @@ class FacesTab(QWidget):
         
         # Левая панель - список персон
         self.left_panel = QWidget()
-        self.left_panel.setFixedWidth(350)  # Устанавливаем фиксированную ширину 350px
+        self.left_panel.setFixedWidth(250)  # Устанавливаем фиксированную ширину 250px
         left_layout = QVBoxLayout(self.left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
         
@@ -477,8 +477,8 @@ class FacesTab(QWidget):
         
         splitter.addWidget(self.right_panel)
         
-        # Установка пропорций - левая панель (персоны) фиксированная 350px, остальное - правая панель (лица)
-        splitter.setSizes([350, 650])  # Начальные размеры
+        # Установка пропорций - левая панель (персоны) фиксированная 250px, остальное - правая панель (лица)
+        splitter.setSizes([250, 750]) # Начальные размеры
         layout.addWidget(splitter, 1)
         
         # Загружаем данные
