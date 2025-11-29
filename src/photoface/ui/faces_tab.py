@@ -257,14 +257,16 @@ class FacesTab(QWidget):
         self.delete_empty_persons_btn = QPushButton("Удалить персоны без фото")
         self.delete_empty_persons_btn.clicked.connect(self.delete_empty_persons)
                 
-        self.stats_label = QLabel("Загрузка...")
+        # Убираем stats_label из панели инструментов
+        # self.stats_label = QLabel("Обновление...")
+        # self.stats_label.setMinimumWidth(200)  # Устанавливаем минимальную ширину для лучшего отображения
                 
         toolbar_layout.addWidget(similarity_threshold_label)
         toolbar_layout.addWidget(self.similarity_threshold_edit)
         toolbar_layout.addWidget(self.cluster_btn)
         toolbar_layout.addWidget(self.refresh_btn)
         toolbar_layout.addWidget(self.delete_empty_persons_btn)
-        toolbar_layout.addWidget(self.stats_label)
+        # toolbar_layout.addWidget(self.stats_label)
         toolbar_layout.addStretch()
                 
         layout.addLayout(toolbar_layout)
@@ -293,6 +295,12 @@ class FacesTab(QWidget):
         
         left_layout.addWidget(self.persons_list)
         
+        # Добавляем информацию о персонах под списком
+        self.persons_stats_label = QLabel()
+        self.persons_stats_label.setWordWrap(True)
+        self.persons_stats_label.setStyleSheet("font-size: 11px; padding: 5px; background-color: #f0f0f0; border: 1px solid #ccc;")
+        left_layout.addWidget(self.persons_stats_label)
+        
         splitter.addWidget(self.left_panel)
         
         # Правая панель - лица выбранной персоны
@@ -313,6 +321,12 @@ class FacesTab(QWidget):
         
         right_layout.addWidget(self.scroll_area)
         
+        # Добавляем информацию о лицах под прокруткой
+        self.faces_stats_label = QLabel()
+        self.faces_stats_label.setWordWrap(True)
+        self.faces_stats_label.setStyleSheet("font-size: 11px; padding: 5px; background-color: #f0f0f0; border: 1px solid #ccc;")
+        right_layout.addWidget(self.faces_stats_label)
+        
         splitter.addWidget(self.right_panel)
         
         # Установка пропорций
@@ -326,6 +340,9 @@ class FacesTab(QWidget):
         """Обновляет данные в интерфейсе"""
         self.load_persons()
         self.update_stats()
+        self.update_persons_stats()
+        # Убираем вызов обновления старой статистики
+        # self.update_old_stats()
         
     def load_persons(self):
         """Загружает список персоны"""
@@ -382,12 +399,38 @@ class FacesTab(QWidget):
             
     def update_stats(self):
         """Обновляет статистику"""
-        total_faces = self.db_manager.get_unrecognized_faces_count()
+        # Получаем общее количество лиц (все записи в таблице faces)
+        total_faces = self.get_total_faces_count()
+        # Получаем количество подтвержденных лиц (где is_person = 1)
+        confirmed_faces = self.get_confirmed_faces_count()
+        # Неопознанные лица - это те, что принадлежат персоне "not recognized"
+        unrecognized_id = self.db_manager.get_person_by_name('not recognized')
+        unrecognized_faces = 0
+        if unrecognized_id:
+            unrecognized_faces = len(self.db_manager.get_person_faces(unrecognized_id))
+        
+        # Обновляем статистику в нижней части правой панели (вместо панели инструментов)
+        stats_text = f"Всего найдено лиц: {total_faces} | Подтвержденных: {confirmed_faces} | Не распределенных лиц: {unrecognized_faces} (группа 'not recognized')"
+        self.faces_stats_label.setText(stats_text)
+        
+    def update_persons_stats(self):
+        """Обновляет статистику по персонам"""
         persons_stats = self.db_manager.get_person_stats()
         confirmed_persons = sum(1 for _, _, confirmed, _ in persons_stats if confirmed)
+        unconfirmed_persons = len(persons_stats) - confirmed_persons
         
-        stats_text = f"Персон: {len(persons_stats)} | Подтверждено: {confirmed_persons} | Неопознанных лиц: {total_faces}"
-        self.stats_label.setText(stats_text)
+        stats_text = f"Персон: {len(persons_stats)}\nПодтвержденных: {confirmed_persons}\nНе подтвержденных: {unconfirmed_persons}"
+        self.persons_stats_label.setText(stats_text)
+        
+    # Удаляем метод update_old_stats, так как он больше не нужен
+    # def update_old_stats(self):
+    #     """Обновляет старую статистику в панели инструментов (для совместимости)"""
+    #     persons_stats = self.db_manager.get_person_stats()
+    #     confirmed_persons = sum(1 for _, _, confirmed, _ in persons_stats if confirmed)
+    #     total_faces = self.db_manager.get_unrecognized_faces_count()
+    #
+    #     stats_text = f"Персон: {len(persons_stats)} | Подтвержденных: {confirmed_persons} | Неопознанных лиц: {total_faces}"
+    #     self.stats_label.setText(stats_text)
         
     def on_person_selected(self, index):
         """Обрабатывает выбор персоны"""
@@ -439,6 +482,8 @@ class FacesTab(QWidget):
             no_faces_label = QLabel("Нет лиц для отображения")
             no_faces_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.faces_layout.addWidget(no_faces_label, 0, 0)
+            # Обновляем общую статистику по лицам
+            self.update_faces_stats(person_id)
             return
             
         # Отображаем лица в сетке
@@ -470,6 +515,23 @@ class FacesTab(QWidget):
             if col >= max_cols:
                 col = 0
                 row += 1
+                
+        # Обновляем общую статистику по лицам (не по персоне)
+        self.update_faces_stats(person_id)
+        
+    def update_faces_stats(self, person_id):
+        """Обновляет общую статистику по лицам (не по персоне)"""
+        # Обновляем общую статистику вместо статистики по персоне
+        total_all_faces = self.get_total_faces_count()
+        total_confirmed_faces = self.get_confirmed_faces_count()
+        # Неопознанные лица - это те, что принадлежат персоне "not recognized"
+        unrecognized_id = self.db_manager.get_person_by_name('not recognized')
+        total_unrecognized_faces = 0
+        if unrecognized_id:
+            total_unrecognized_faces = len(self.db_manager.get_person_faces(unrecognized_id))
+        
+        stats_text = f"Всего лиц: {total_all_faces} | Подтвержденных: {total_confirmed_faces} | Не распределенных (группа 'not recognized'): {total_unrecognized_faces}"
+        self.faces_stats_label.setText(stats_text)
                 
     def on_face_confirmed(self, face_id):
         """Обрабатывает подтверждение лица - устанавливает is_person = 1 или открывает диалог редактирования для not recognized"""
@@ -768,6 +830,20 @@ class FacesTab(QWidget):
             current_value = self.config.get('scan.similarity_threshold', 0.6) if self.config else 0.6
             self.similarity_threshold_edit.setText(str(current_value))
             QMessageBox.warning(self, "Неверное значение", "Пожалуйста, введите числовое значение для порога схожести")
+            
+    def get_total_faces_count(self):
+        """Возвращает общее количество лиц"""
+        with self.db_manager.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM faces")
+            return cursor.fetchone()[0]
+            
+    def get_confirmed_faces_count(self):
+        """Возвращает количество подтвержденных лиц (где is_person = 1)"""
+        with self.db_manager.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM faces WHERE is_person = 1")
+            return cursor.fetchone()[0]
 
 
 from PyQt6.QtWidgets import QApplication
