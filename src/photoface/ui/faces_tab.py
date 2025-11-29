@@ -424,6 +424,7 @@ class FacesTab(QWidget):
         
         # Левая панель - список персон
         self.left_panel = QWidget()
+        self.left_panel.setFixedWidth(350)  # Устанавливаем фиксированную ширину 350px
         left_layout = QVBoxLayout(self.left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
         
@@ -476,8 +477,8 @@ class FacesTab(QWidget):
         
         splitter.addWidget(self.right_panel)
         
-        # Установка пропорций
-        splitter.setSizes([250, 650])
+        # Установка пропорций - левая панель (персоны) фиксированная 350px, остальное - правая панель (лица)
+        splitter.setSizes([350, 650])  # Начальные размеры
         layout.addWidget(splitter, 1)
         
         # Загружаем данные
