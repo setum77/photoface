@@ -549,7 +549,7 @@ class FacesTab(QWidget):
             
             # Не показываем "Переименовать" и "Подтвердить все лица" для категории "not recognized"
             if person_name != 'not recognized':
-                rename_action = QAction("Переименовать", self)
+                rename_action = QAction("Переименовать   F2", self)
                 rename_action.triggered.connect(lambda: self.rename_person(person_id, person_name))
                 # Убираем горячую клавишу из контекстного меню, так как она обрабатывается в persons_keyPressEvent
                 menu.addAction(rename_action)
