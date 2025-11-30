@@ -1,11 +1,11 @@
 import os
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter, 
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
                              QListView, QGridLayout, QPushButton, QMessageBox,
-                             QMenu, QProgressDialog, QLabel, QLineEdit, 
-                             QDialog, QDialogButtonBox, QScrollArea, 
+                             QMenu, QProgressDialog, QLabel, QLineEdit,
+                             QDialog, QDialogButtonBox, QScrollArea,
                              QCheckBox, QFrame, QSizePolicy, QToolButton,
                              QListWidget, QListWidgetItem)
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer, QPoint
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QPixmap, QIcon, QFont, QAction
 from src.photoface.core.database import DatabaseManager
 from src.photoface.core.face_clusterer import FaceClusterer
@@ -42,24 +42,15 @@ class FaceThumbnailWidget(QFrame):
         layout.setContentsMargins(2, 2, 2, 2)
         layout.setSpacing(2)
         
-        # Создаем подкласс для thumbnail_label с обработкой двойного клика
-        class ThumbnailLabel(QLabel):
-            double_clicked = pyqtSignal()
-            
-            def mouseDoubleClickEvent(self, event):
-                self.double_clicked.emit()
-        
         # Миниатюра лица
-        self.thumbnail_label = ThumbnailLabel()
+        self.thumbnail_label = QLabel()
         self.thumbnail_label.setFixedSize(120, 120)
         self.thumbnail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.thumbnail_label.setStyleSheet("border: 1px solid #ccc; background-color: white;")
+        self.thumbnail_label.setMouseTracking(True)
         
         # Загружаем и обрезаем миниатюру лица
         self.load_face_thumbnail()
-        
-        # Подключаем сигнал двойного клика
-        self.thumbnail_label.double_clicked.connect(self.thumbnail_double_clicked)
         
         # Кнопки действий
         buttons_layout = QHBoxLayout()
@@ -91,8 +82,36 @@ class FaceThumbnailWidget(QFrame):
         
         self.setFrameStyle(QFrame.Shape.StyledPanel)
         self.setStyleSheet("QFrame { border: 1px solid #ddd; border-radius: 3px; }")
+        
+        # Устанавливаем политику фокуса и включаем обработку двойного клика для всего виджета
+        self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        
+        # Устанавливаем event filter для дочерних элементов
+        # self.thumbnail_label.installEventFilter(self)
+        # for in range(buttons_layout.count()):
+        #     item = buttons_layout.itemAt(i)
+        #     if item and item.widget():
+        #         item.widget().installEventFilter(self)
 
         self.update_buttons()
+        
+        # Убедимся, что виджет может принимать фокус и обрабатывать события
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        
+    
+    def mouseDoubleClickEvent(self, event):
+        """Обработка двойного клика по виджету миниатюры"""
+        # Проверяем, был ли клик на thumbnail_label
+        pos = event.pos()
+        # Преобразуем позицию в координаты thumbnail_label
+        local_pos = self.thumbnail_label.mapFromParent(pos)
+        if self.thumbnail_label.rect().contains(local_pos):
+            self.thumbnail_double_clicked()
+        # Не вызываем родительский метод, чтобы избежать конфликта
+        # super().mouseDoubleClickEvent(event)
 
     def update_buttons(self):
         if self.is_person_status == 1:  # Подтверждено
@@ -124,14 +143,16 @@ class FaceThumbnailWidget(QFrame):
             
     def thumbnail_double_clicked(self):
         """Обрабатывает двойной клик на миниатюре"""
+        print(f"DEBUG: Thumbnail double clicked for image: {self.image_path}")
         self.face_double_clicked.emit(self.image_path)
 class PersonFaceBlockWidget(QWidget):
     """Виджет блока лица с заголовком и миниатюрами лиц персоны"""
     
-    rename_person = pyqtSignal(int)  # person_id
-    confirm_all_faces = pyqtSignal(int)  # person_id
-    delete_person = pyqtSignal(int)  # person_id
+    rename_person = pyqtSignal(int) # person_id
+    confirm_all_faces = pyqtSignal(int) # person_id
+    delete_person = pyqtSignal(int) # person_id
     person_selected = pyqtSignal(int)  # person_id
+    image_double_clicked = pyqtSignal(str) # image_path
     
     def __init__(self, person_id, person_name, is_confirmed, faces, parent=None, thumbnail_cache=None):
         super().__init__(parent)
@@ -248,28 +269,45 @@ class PersonFaceBlockWidget(QWidget):
         
     def on_face_confirmed(self, face_id):
         """Обработка подтверждения лица"""
+        print(f"DEBUG: Face confirmed - face_id: {face_id}")
         # Обновляем статус в базе данных
-        if self.parent() and hasattr(self.parent(), 'db_manager'):
-            self.parent().db_manager.set_face_person_status(face_id, 1)
+        parent = self.parent()
+        if parent and hasattr(parent, 'db_manager') and parent.db_manager:
+            parent.db_manager.set_face_person_status(face_id, 1)
             # Обновляем интерфейс
-            self.parent().refresh_data()
+            parent.refresh_data()
+            # Также обновим состояние кнопок на соответствующем виджете
+            for widget in self.face_widgets:
+                if widget.face_id == face_id:
+                    widget.is_person_status = 1
+                    widget.update_buttons()
+                    break
     
     def on_face_rejected(self, face_id):
         """Обработка отклонения лица"""
+        print(f"DEBUG: Face rejected - face_id: {face_id}")
         # Перемещаем лицо в not recognized
-        if self.parent() and hasattr(self.parent(), 'db_manager'):
-            not_recognized_id = self.parent().db_manager.get_person_by_name('not recognized')
+        parent = self.parent()
+        if parent and hasattr(parent, 'db_manager') and parent.db_manager:
+            print(f"DEBUG: Found parent with db_manager, attempting to move face to 'not recognized'")
+            not_recognized_id = parent.db_manager.get_person_by_name('not recognized')
             if not_recognized_id:
-                self.parent().db_manager.move_face_to_person(face_id, not_recognized_id)
-                self.parent().db_manager.set_face_person_status(face_id, 0)
+                print(f"DEBUG: Found 'not recognized' person with id: {not_recognized_id}")
+                success_move = parent.db_manager.move_face_to_person(face_id, not_recognized_id)
+                success_status = parent.db_manager.set_face_person_status(face_id, 0)
+                print(f"DEBUG: move_face_to_person result: {success_move}, set_face_person_status result: {success_status}")
                 # Обновляем интерфейс
-                self.parent().refresh_data()
+                parent.refresh_data()
+            else:
+                print(f"DEBUG: Could not find 'not recognized' person in database")
+        else:
+            print(f"DEBUG: Parent or db_manager not available")
     
     def on_face_double_clicked(self, image_path):
         """Обработка двойного клика по лицу"""
-        # Передаем сигнал выше
-        if self.parent() and hasattr(self.parent(), 'image_double_clicked'):
-            self.parent().image_double_clicked.emit(image_path)
+        print(f"DEBUG: Face double clicked - image_path: {image_path}")
+        # Передаем сигнал выше через собственный сигнал
+        self.image_double_clicked.emit(image_path)
             
     def mousePressEvent(self, event):
         """Обработка клика по блоку персоны"""
@@ -367,6 +405,25 @@ class FacesTab(QWidget):
     
     image_double_clicked = pyqtSignal(str)
     needs_refresh = pyqtSignal()
+    
+    def __init__(self, db_manager: DatabaseManager, config=None):
+        super().__init__()
+        self.db_manager = db_manager
+        self.config = config
+        self.face_clusterer = FaceClusterer(db_manager, config=config)
+        self.current_person_id = None
+        self.person_blocks = {}  # Словарь для хранения блоков персон
+        # Инициализируем кэш миниатюр с db_manager
+        global face_thumbnail_cache
+        face_thumbnail_cache = FaceThumbnailCache(db_manager=db_manager, cache_size=1000)
+        self.thumbnail_cache = face_thumbnail_cache
+        
+        # Подключаем сигнал для отладки
+        self.image_double_clicked.connect(self._debug_image_double_clicked)
+        self.init_ui()
+        
+    def _debug_image_double_clicked(self, image_path):
+        print(f"DEBUG: FacesTab received image_double_clicked with path: {image_path}")
     
     def __init__(self, db_manager: DatabaseManager, config=None):
         super().__init__()
@@ -671,6 +728,9 @@ class FacesTab(QWidget):
             person_block.delete_person.connect(self.delete_person)
             person_block.person_selected.connect(self.on_person_block_selected)
             
+            # Подключаем сигнал двойного клика от блока персоны к сигналу вкладки
+            person_block.image_double_clicked.connect(self.image_double_clicked)
+            
             # Добавляем блок в макет
             self.faces_layout.addWidget(person_block, row, 0)
             
@@ -750,7 +810,7 @@ class FacesTab(QWidget):
             return
             
         # Получаем имя персоны из результата запроса
-        person_name = face_info[10] # индекс поля person_name в SELECT
+        person_name = face_info[9] # индекс поля person_name в SELECT
         
         # Если персона "not recognized", открываем диалог редактирования
         if person_name == 'not recognized':

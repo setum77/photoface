@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QRect, QTimer, QPoint, QSize
 from PyQt6.QtGui import (
     QPixmap, QPainter, QPen, QColor, QFont, QMouseEvent, QKeyEvent, QAction, QCursor,
-    QPolygon
+    QPolygon, QImage
 )
 from PIL import Image
 import traceback
