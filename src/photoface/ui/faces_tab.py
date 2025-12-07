@@ -163,6 +163,7 @@ class PersonFaceBlockWidget(QWidget):
     person_selected = pyqtSignal(int)  # person_id
     image_double_clicked = pyqtSignal(str) # image_path
     face_rejected = pyqtSignal(int)  # face_id - сигнал для обработки отклонения лица
+    face_confirmed = pyqtSignal(int)  # face_id - сигнал для обработки подтверждения лица
     
     def __init__(self, person_id, person_name, is_confirmed, faces, parent=None, thumbnail_cache=None):
         super().__init__(parent)
@@ -291,24 +292,8 @@ class PersonFaceBlockWidget(QWidget):
     def on_face_confirmed(self, face_id):
         """Обработка подтверждения лица"""
         print(f"DEBUG: Face confirmed - face_id: {face_id}")
-        # Обновляем статус в базе данных
-        parent_widget = self.parent()
-        if parent_widget and hasattr(parent_widget, 'parent'):
-            parent = parent_widget.parent()  # Это FacesTab
-            if parent and hasattr(parent, 'db_manager') and parent.db_manager:
-                parent.db_manager.set_face_person_status(face_id, 1)
-                # Обновляем интерфейс
-                parent.refresh_data()
-                # Также обновим состояние кнопок на соответствующем виджете
-                for widget in self.face_widgets:
-                    if widget.face_id == face_id:
-                        widget.is_person_status = 1
-                        widget.update_buttons()
-                        break
-            else:
-                print(f"DEBUG: Parent or db_manager not available in on_face_confirmed")
-        else:
-            print(f"DEBUG: Cannot access FacesTab through parent hierarchy in on_face_confirmed")
+        # Отправляем сигнал наверх к FacesTab для обработки через сигнал
+        self.face_confirmed.emit(face_id)
     
     def on_face_rejected(self, face_id):
         """Обработка отклонения лица - отправляем сигнал наверх для обработки в FacesTab"""
@@ -744,6 +729,7 @@ class FacesTab(QWidget):
             person_block.delete_person.connect(self.delete_person)
             person_block.person_selected.connect(self.on_person_block_selected)
             person_block.face_rejected.connect(self.on_face_rejected_from_block)
+            person_block.face_confirmed.connect(self.on_face_confirmed)
             
             # Подключаем сигнал двойного клика от блока персоны к сигналу вкладки
             person_block.image_double_clicked.connect(self.image_double_clicked)
@@ -846,29 +832,21 @@ class FacesTab(QWidget):
                             self.db_manager.set_face_person_status(face_id, 1)
                             self.refresh_data()
         else:
-            # Просто устанавливаем is_person = 1 для подтвержденного лица
+            # Просто устанавливаем is_person = 1 для именованной персоны
             if self.db_manager.set_face_person_status(face_id, 1):
+                # Обновляем интерфейс
                 self.refresh_data()
-    def on_face_rejected_from_block(self, face_id):
-        """Обрабатывает отклонение лица - перемещает лицо в not recognized"""
-        reply = QMessageBox.question(
-            self, "Подтверждение",
-            "Убрать лицо из персоны?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            # Перемещаем лицо в "not recognized"
-            not_recognized_id = self.db_manager.get_person_by_name('not recognized')
-            if not_recognized_id:
-                if self.db_manager.move_face_to_person(face_id, not_recognized_id):
-                    # Устанавливаем is_person = 0 для лица, которое перемещается в "not recognized"
-                    self.db_manager.set_face_person_status(face_id, 0)
-                    self.refresh_data()
-                    self.needs_refresh.emit()
-                    
+                
+                # Найти соответствующий виджет и обновить состояние кнопки
+                for person_block in self.person_blocks.values():
+                    for face_widget in person_block.face_widgets:
+                        if face_widget.face_id == face_id:
+                            face_widget.is_person_status = 1
+                            face_widget.update_buttons()
+                            break
+                
     def on_face_rejected(self, face_id):
-        """Обрабатывает отклонение лица - устанавливает is_person = 1 или открывает диалог редактирования для not recognized"""
+        """Обрабатывает отклонение лица - перемещает лицо в not recognized"""
         # Получаем информацию о лице и связанной персоне
         with self.db_manager.get_connection() as conn:
             cursor = conn.cursor()
@@ -887,27 +865,37 @@ class FacesTab(QWidget):
         # Получаем имя персоны из результата запроса
         person_name = face_info[9] # индекс поля person_name в SELECT
         
-        # Если персона "not recognized", открываем диалог редактирования
+        # Если персона "not recognized", просто отклоняем лицо
         if person_name == 'not recognized':
-            dialog = FaceEditDialog("", self.db_manager, self)
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                new_name = dialog.get_name()
-                if new_name:
-                    # Создаем новую персону с введенным именем
-                    new_person_id = self.db_manager.create_person(new_name)
-                    if new_person_id:
-                        # Перемещаем лицо в новую персону
-                        if self.db_manager.move_face_to_person(face_id, new_person_id):
-                            # Подтверждаем персону
-                            self.db_manager.confirm_person(new_person_id)
-                            # Устанавливаем is_person = 1 для этого лица
-                            self.db_manager.set_face_person_status(face_id, 1)
-                            self.refresh_data()
-        else:
-            # Просто устанавливаем is_person = 1 для подтвержденного лица
-            if self.db_manager.set_face_person_status(face_id, 1):
+            # Просто устанавливаем is_person = 0 для лица в not recognized
+            if self.db_manager.set_face_person_status(face_id, 0):
                 self.refresh_data()
-                        
+        else:
+            # Перемещаем лицо в "not recognized"
+            not_recognized_id = self.db_manager.get_person_by_name('not recognized')
+            if not_recognized_id:
+                if self.db_manager.move_face_to_person(face_id, not_recognized_id):
+                    # Устанавливаем is_person = 0 для лица, которое перемещается в "not recognized"
+                    self.db_manager.set_face_person_status(face_id, 0)
+                    self.refresh_data()
+                    self.needs_refresh.emit()
+    def on_face_rejected_from_block(self, face_id):
+        """Обрабатывает отклонение лица - перемещает лицо в not recognized"""
+        reply = QMessageBox.question(
+            self, "Подтверждение",
+            "Убрать лицо из персоны?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            # Перемещаем лицо в "not recognized"
+            not_recognized_id = self.db_manager.get_person_by_name('not recognized')
+            if not_recognized_id:
+                if self.db_manager.move_face_to_person(face_id, not_recognized_id):
+                    # Устанавливаем is_person = 0 для лица, которое перемещается в "not recognized"
+                    self.db_manager.set_face_person_status(face_id, 0)
+                    self.refresh_data()
+                    self.needs_refresh.emit()
                     
     def show_person_context_menu(self, position):
         """Показывает контекстное меню для персоны"""
