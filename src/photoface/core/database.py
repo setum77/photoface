@@ -409,9 +409,10 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT f.id, f.image_id, i.file_path, f.bbox_x1, f.bbox_y1,
-                       f.bbox_x2, f.bbox_y2, f.confidence, f.is_person
+                       f.bbox_x2, f.bbox_y2, f.confidence, f.is_person, p.is_confirmed
                 FROM faces f
                 JOIN images i ON f.image_id = i.id
+                JOIN persons p ON f.person_id = p.id
                 WHERE f.person_id = ?
                 ORDER BY f.confidence DESC
             ''', (person_id,))
@@ -547,7 +548,7 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT f.id, f.bbox_x1, f.bbox_y1, f.bbox_x2, f.bbox_y2,
-                    f.confidence, p.name, p.id as person_id, f.is_person
+                    f.confidence, p.name, p.id as person_id, f.is_person, p.is_confirmed
                 FROM faces f
                 JOIN images i ON f.image_id = i.id
                 JOIN persons p ON f.person_id = p.id

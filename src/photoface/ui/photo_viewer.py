@@ -89,12 +89,13 @@ class FaceOverlayWidget(QLabel):
     
     face_clicked = pyqtSignal(int) # face_id
     
-    def __init__(self, face_id, bbox, person_name, confidence, parent=None):
+    def __init__(self, face_id, bbox, person_name, confidence, is_confirmed=None, parent=None):
         super().__init__(parent)
         self.face_id = face_id
         self.bbox = bbox  # (x, y, width, height) в координатах изображения
         self.person_name = person_name or "Unknown"
         self.confidence = confidence
+        self.is_confirmed = is_confirmed  # 1 для подтвержденных, 0 для неподтвержденных, None для неизвестных
         self.is_hovered = False
         self.is_selected = False
         self.scale_factor = 1.0
@@ -129,10 +130,14 @@ class FaceOverlayWidget(QLabel):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         # Определяем цвет рамки
-        if self.person_name != "Unknown":
-            color = QColor(0, 255, 0)  # Зеленый для известных
+        if self.person_name == "not recognized":
+            color = QColor(255, 255, 0)  # Желтый для "not recognized"
+        elif self.is_confirmed == 1:
+            color = QColor(0, 255, 0)  # Зеленый для подтвержденных персон
+        elif self.is_confirmed == 0:
+            color = QColor(0, 0, 255)  # Синий для неподтвержденных персон
         else:
-            color = QColor(255, 255, 0)  # Желтый для неизвестных
+            color = QColor(255, 255, 0)  # Желтый для всех остальных (Unknown)
             
         if self.is_hovered:
             color = color.lighter(150)
@@ -511,8 +516,8 @@ class PhotoViewer(QWidget):
             faces_data = self.db_manager.get_image_faces(image_path)
             logger.debug(f"Loaded {len(faces_data)} faces for image {image_path}")
 
-            for face_id, x1, y1, x2, y2, conf, name, person_id, is_person_status in faces_data:
-                logger.debug(f"Processing face {face_id}: x1={x1}, y1={y1}, x2={x2}, y2={y2}, conf={conf}, name={name}, person_id={person_id}, is_person_status={is_person_status}")
+            for face_id, x1, y1, x2, y2, conf, name, person_id, is_person_status, is_confirmed in faces_data:
+                logger.debug(f"Processing face {face_id}: x1={x1}, y1={y1}, x2={x2}, y2={y2}, conf={conf}, name={name}, person_id={person_id}, is_person_status={is_person_status}, is_confirmed={is_confirmed}")
                 # Вычисляем bbox как (x, y, width, height)
                 x = x1
                 y = y1
@@ -524,9 +529,10 @@ class PhotoViewer(QWidget):
                     'person_name': name,
                     'confidence': conf,
                     'person_id': person_id,
-                    'is_person': is_person_status
+                    'is_person': is_person_status,
+                    'is_confirmed': is_confirmed
                 }
-                logger.debug(f"Face {face_id}: bbox=({x},{y},{width},{height}), name={name}, conf={conf}")
+                logger.debug(f"Face {face_id}: bbox=({x},{y},{width},{height}), name={name}, conf={conf}, is_confirmed={is_confirmed}")
 
             logger.debug(f"Completed loading face data, total faces in face_data: {len(self.face_data)}")
         except Exception as e:
@@ -553,7 +559,7 @@ class PhotoViewer(QWidget):
             logger.debug(f"Creating overlay for face {face_id}: bbox={bbox}, name={person_name}, confidence={confidence}")
 
             overlay = FaceOverlayWidget(
-                face_id, bbox, person_name, confidence, self.overlay_widget
+                face_id, bbox, person_name, confidence, face_info['is_confirmed'], self.overlay_widget
             )
             logger.debug(f"Created FaceOverlayWidget for face {face_id}")
             overlay.face_clicked.connect(self.edit_face_name)
@@ -643,7 +649,9 @@ class PhotoViewer(QWidget):
                     face_info['person_name'] = new_name
                     # Обновляем is_person статус после изменения
                     face_info['is_person'] = 1 # Так как имя изменено, считаем, что лицо подтверждено
+                    face_info['is_confirmed'] = 1 # Также обновляем is_confirmed
                     self.face_overlays[face_id].person_name = new_name
+                    self.face_overlays[face_id].is_confirmed = 1 # Обновляем is_confirmed в оверлее
                     self.face_overlays[face_id].update()
                     self.face_name_changed.emit(face_id, new_name)
 
@@ -683,7 +691,7 @@ class PhotoViewer(QWidget):
                     self.db_manager.confirm_person(current_person_id)
                     # Устанавливаем is_person = 1 для всех лиц этой персоны
                     person_faces = self.db_manager.get_person_faces(current_person_id)
-                    for face_id_in_person, _, _, _, _, _, _, _, _ in person_faces:
+                    for face_id_in_person, _, _, _, _, _, _, _, _, _ in person_faces:
                         self.db_manager.set_face_person_status(face_id_in_person, 1)
                     logger.debug(f"Confirmed person {current_person_id} and updated {len(person_faces)} faces")
                     return True
@@ -699,8 +707,16 @@ class PhotoViewer(QWidget):
                     if self.db_manager.move_face_to_person(face_id, new_person_id):
                         # Подтверждаем персону
                         self.db_manager.confirm_person(new_person_id)
-                        # Устанавливаем is_person = 1 для этого лица
+                        # Устанавливаем is_person = 1 и is_confirmed = 1 для этого лица
                         self.db_manager.set_face_person_status(face_id, 1)
+                        # Обновляем информацию в face_data
+                        if face_id in self.face_data:
+                            self.face_data[face_id]['is_person'] = 1
+                            self.face_data[face_id]['is_confirmed'] = 1
+                        # Обновляем соответствующий оверлей
+                        if face_id in self.face_overlays:
+                            self.face_overlays[face_id].is_confirmed = 1
+                            self.face_overlays[face_id].update()
                         logger.debug(f"Created and confirmed new person {new_person_id}")
                         return True
                 return False

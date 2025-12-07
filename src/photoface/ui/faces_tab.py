@@ -718,6 +718,9 @@ class FacesTab(QWidget):
         for person_id, name, is_confirmed, face_count in sorted_persons:
             # Получаем лица для персоны
             faces = self.db_manager.get_person_faces(person_id)
+            # Пропускаем person_is_confirmed, так как он не нужен в этом контексте
+            faces = [(face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status)
+                    for face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status, person_is_confirmed in faces]
             
             # Создаем блок для персоны
             person_block = PersonFaceBlockWidget(person_id, name, is_confirmed, faces, parent=self, thumbnail_cache=self.thumbnail_cache)
