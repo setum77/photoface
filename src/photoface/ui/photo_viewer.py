@@ -1,4 +1,5 @@
 import os
+import logging
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
     QLineEdit, QDialog, QDialogButtonBox, QMessageBox, QMenu,
@@ -11,6 +12,8 @@ from PyQt6.QtGui import (
 )
 from PIL import Image
 import traceback
+
+logger = logging.getLogger(__name__)
 
 
 class FaceEditDialog(QDialog):
@@ -109,13 +112,16 @@ class FaceOverlayWidget(QLabel):
         
     def set_scale_factor(self, factor):
         """Обновляет масштабный фактор"""
+        logger.debug(f"Setting scale factor for face overlay {self.face_id}: {factor}")
         self.scale_factor = factor
         x, y, w, h = self.bbox
         scaled_x = int(x * factor)
         scaled_y = int(y * factor)
         scaled_w = int(w * factor)
         scaled_h = int(h * factor)
+        logger.debug(f"Setting geometry for face overlay {self.face_id}: ({scaled_x}, {scaled_y}, {scaled_w}, {scaled_h})")
         self.setGeometry(scaled_x, scaled_y, scaled_w, scaled_h)
+        logger.debug(f"Face overlay {self.face_id} scaled: factor={factor}, bbox=({x},{y},{w},{h}) -> ({scaled_x},{scaled_y},{scaled_w},{scaled_h})")
         
     def paintEvent(self, event):
         """Рисует рамку и метку лица"""
@@ -205,9 +211,23 @@ class PhotoViewer(QWidget):
         self.max_scale = 5.0
         self.face_overlays = {}  # face_id -> FaceOverlayWidget
         self.face_data = {}  # face_id -> face_info
+        self._display_update_pending = False  # Флаг для предотвращения множественных обновлений
         
         self._init_ui()
-        
+
+    def _schedule_display_update(self, delay=50):
+        """Планирует обновление дисплея с предотвращением множественных вызовов"""
+        if not self._display_update_pending:
+            self._display_update_pending = True
+            logger.debug(f"Scheduling display update with delay {delay}ms")
+            QTimer.singleShot(delay, self._perform_display_update)
+
+    def _perform_display_update(self):
+        """Выполняет обновление дисплея и сбрасывает флаг"""
+        self._update_display()
+        self._display_update_pending = False
+        logger.debug("Display update completed")
+
     def _init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -231,6 +251,7 @@ class PhotoViewer(QWidget):
         self.overlay_widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
         self.overlay_widget.setStyleSheet("background-color: rgba(0, 0, 0, 0);")
         self.overlay_widget.hide()
+        logger.debug(f"Created overlay widget with parent: {self.overlay_widget.parent()}")
         
         # Добавляем центральный виджет в прокручиваемую область
         self.scroll_area = QScrollArea()
@@ -259,31 +280,41 @@ class PhotoViewer(QWidget):
         
     def _pil_to_qimage(self, pil_img):
         """Конвертирует PIL Image в QImage"""
+        logger.debug(f"Converting PIL image to QImage, mode: {pil_img.mode}, size: {pil_img.size}")
         if pil_img.mode == "RGB":
             # 3x8 бит на пиксель (24 бита на пиксель)
+            logger.debug("Converting RGB image")
             return self._rgb_to_qimage(pil_img)
         elif pil_img.mode == "RGBA":
             # 4x8 бит на пиксель (32 бита на пиксель)
+            logger.debug("Converting RGBA image")
             return self._rgba_to_qimage(pil_img)
         else:
             # Конвертируем в RGB если не поддерживаемый режим
+            logger.debug(f"Converting {pil_img.mode} image to RGB")
             rgb_img = pil_img.convert("RGB")
             return self._rgb_to_qimage(rgb_img)
     
     def _rgb_to_qimage(self, pil_img):
         """Конвертирует RGB PIL Image в QImage"""
+        logger.debug(f"Converting RGB PIL image to QImage, size: {pil_img.size}")
         # Преобразуем PIL изображение в байтовый массив
         data = pil_img.tobytes("raw", "RGB")
+        logger.debug(f"Converted PIL image to bytes, length: {len(data)}")
         # Создаем QImage
         qimage = QImage(data, pil_img.size[0], pil_img.size[1], QImage.Format.Format_RGB888)
+        logger.debug(f"Created QImage with size: {qimage.size()}, format: {qimage.format()}")
         return qimage
         
     def _rgba_to_qimage(self, pil_img):
         """Конвертирует RGBA PIL Image в QImage"""
+        logger.debug(f"Converting RGBA PIL image to QImage, size: {pil_img.size}")
         # Преобразуем PIL изображение в байтовый массив
         data = pil_img.tobytes("raw", "RGBA")
+        logger.debug(f"Converted PIL image to bytes, length: {len(data)}")
         # Создаем QImage
         qimage = QImage(data, pil_img.size[0], pil_img.size[1], QImage.Format.Format_RGBA8888)
+        logger.debug(f"Created QImage with size: {qimage.size()}, format: {qimage.format()}")
         return qimage
         
     def load_image(self, image_path):
@@ -292,19 +323,92 @@ class PhotoViewer(QWidget):
             QMessageBox.warning(self, "Ошибка", "Файл не существует")
             return False
             
-        # Загружаем изображение через PIL для поддержки кириллических символов в пути
+        # Сначала пробуем резервный вариант - прямая загрузка QPixmap
+        logger.debug(f"Attempting to load image directly with QPixmap: {image_path}")
         try:
-            from PIL import Image as PILImage
-            pil_img = PILImage.open(image_path)
-            # Конвертируем PIL изображение в QPixmap
-            qimage = self._pil_to_qimage(pil_img)
-            pixmap = QPixmap.fromImage(qimage)
-        except Exception as e:
-            print(f"Ошибка загрузки изображения через PIL: {e}")
-            # Резервный вариант - прямая загрузка QPixmap
             pixmap = QPixmap(image_path)
+            logger.debug(f"Direct QPixmap loading result: isNull={pixmap.isNull()}")
+            
+            if not pixmap.isNull():
+                logger.debug("Successfully loaded image using direct QPixmap method")
+            else:
+                logger.warning("Direct QPixmap loading failed, trying PIL method")
+                # Если прямая загрузка не удалась, пробуем метод с PIL
+                from PIL import Image as PILImage
+                logger.debug(f"Attempting to load image with PIL: {image_path}")
+                pil_img = PILImage.open(image_path)
+                logger.debug(f"Successfully loaded PIL image: size={pil_img.size}, mode={pil_img.mode}")
+                
+                # Проверяем размер изображения
+                width, height = pil_img.size
+                logger.debug(f"Image dimensions: {width}x{height}")
+                
+                # Если изображение слишком большое, логируем это
+                if width * height > 1000000:  # 10 миллионов пикселей
+                    logger.warning(f"Large image detected: {width}x{height} ({width * height} pixels)")
+                
+                # Конвертируем PIL изображение в QPixmap
+                qimage = self._pil_to_qimage(pil_img)
+                logger.debug(f"Converted PIL image to QImage: size={qimage.size()}, format={qimage.format()}")
+                
+                logger.debug("Attempting to create QPixmap from QImage")
+                try:
+                    pixmap = QPixmap.fromImage(qimage)
+                    logger.debug(f"Created QPixmap: size={pixmap.size()}, isNull={pixmap.isNull()}")
+                    
+                    # Проверяем, успешно ли создан QPixmap
+                    if pixmap.isNull():
+                        logger.error("Failed to create QPixmap from QImage - pixmap is null")
+                        return False
+                except Exception as e:
+                    logger.error(f"Exception occurred while creating QPixmap from QImage: {e}")
+                    import traceback
+                    logger.error(f"Traceback: {traceback.format_exc()}")
+                    return False
+        except Exception as e:
+            logger.error(f"Ошибка загрузки изображения: {e}")
+            logger.debug(f"Falling back to PIL method: {image_path}")
+            # Резервный вариант - метод с PIL
+            try:
+                from PIL import Image as PILImage
+                logger.debug(f"Attempting to load image with PIL: {image_path}")
+                pil_img = PILImage.open(image_path)
+                logger.debug(f"Successfully loaded PIL image: size={pil_img.size}, mode={pil_img.mode}")
+                
+                # Проверяем размер изображения
+                width, height = pil_img.size
+                logger.debug(f"Image dimensions: {width}x{height}")
+                
+                # Если изображение слишком большое, логируем это
+                if width * height > 1000000:  # 10 миллионов пикселей
+                    logger.warning(f"Large image detected: {width}x{height} ({width * height} pixels)")
+                
+                # Конвертируем PIL изображение в QPixmap
+                qimage = self._pil_to_qimage(pil_img)
+                logger.debug(f"Converted PIL image to QImage: size={qimage.size()}, format={qimage.format()}")
+                
+                logger.debug("Attempting to create QPixmap from QImage")
+                try:
+                    pixmap = QPixmap.fromImage(qimage)
+                    logger.debug(f"Created QPixmap: size={pixmap.size()}, isNull={pixmap.isNull()}")
+                    
+                    # Проверяем, успешно ли создан QPixmap
+                    if pixmap.isNull():
+                        logger.error("Failed to create QPixmap from QImage - pixmap is null")
+                        return False
+                except Exception as pil_error:
+                    logger.error(f"Exception occurred while creating QPixmap from QImage in fallback: {pil_error}")
+                    import traceback
+                    logger.error(f"Traceback: {traceback.format_exc()}")
+                    return False
+            except Exception as fallback_error:
+                logger.error(f"PIL fallback method also failed: {fallback_error}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                return False
         
         if pixmap.isNull():
+            logger.error(f"Failed to load image: pixmap is null for {image_path}")
             QMessageBox.warning(self, "Ошибка", "Не удалось загрузить изображение")
             return False
             
@@ -322,73 +426,99 @@ class PhotoViewer(QWidget):
         self._create_face_overlays()
         
         # Подгоняем изображение под размер окна с задержкой, чтобы избежать конфликта с первоначальной отрисовкой
+        logger.debug("Scheduling fit_to_window after image load")
         QTimer.singleShot(150, self.fit_to_window)
         
         return True
 
     def _update_display(self):
         """Обновляет отображение изображения с учетом масштаба"""
+        logger.debug(f"Starting _update_display, original_pixmap isNull: {self.original_pixmap.isNull() if self.original_pixmap else 'None'}, scale_factor: {self.scale_factor}")
         if self.original_pixmap and not self.original_pixmap.isNull():
             # Масштабируем изображение
             scaled_size = self.original_pixmap.size() * self.scale_factor
+            logger.debug(f"Scaling pixmap from {self.original_pixmap.size()} to {scaled_size}")
             self.scaled_pixmap = self.original_pixmap.scaled(
                 scaled_size,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation
             )
+            logger.debug(f"Scaled pixmap created: {self.scaled_pixmap.size()}")
             
             # Устанавливаем изображение в label
             self.image_label.setPixmap(self.scaled_pixmap)
+            logger.debug("Set scaled pixmap to image_label")
             
             # Обновляем размеры overlay
+            logger.debug("Calling _update_overlay_geometry")
             self._update_overlay_geometry()
             
             # Обновляем масштаб оверлеев
+            logger.debug("Calling _update_face_overlay_scales")
             self._update_face_overlay_scales()
+        else:
+            logger.warning(f"_update_display skipped: original_pixmap is {'None' if not self.original_pixmap else 'null'}")
 
     def _update_overlay_geometry(self):
         """Обновляет геометрию оверлея"""
-        if self.scaled_pixmap:
+        logger.debug(f"Starting _update_overlay_geometry, scaled_pixmap isNull: {self.scaled_pixmap.isNull() if self.scaled_pixmap else 'None'}")
+        if self.scaled_pixmap and not self.scaled_pixmap.isNull():
             # Устанавливаем размер оверлея равным размеру изображения
-            self.overlay_widget.resize(self.scaled_pixmap.size())
+            overlay_size = self.scaled_pixmap.size()
+            logger.debug(f"Resizing overlay to pixmap size: {overlay_size}")
+            self.overlay_widget.resize(overlay_size)
             
             # Вычисляем позицию изображения виджете для центрирования оверлея
             # Получаем размеры области прокрутки
             viewport_size = self.scroll_area.viewport().size()
             image_size = self.scaled_pixmap.size()
+            logger.debug(f"Viewport size: {viewport_size}, Scaled image size: {image_size}")
             
             # Вычисляем смещения для центрирования
             x_offset = max(0, (viewport_size.width() - image_size.width()) // 2)
             y_offset = max(0, (viewport_size.height() - image_size.height()) // 2)
+            logger.debug(f"Calculated offsets: x={x_offset}, y={y_offset}")
             
             # Позиционируем оверлей с учетом смещения для центрирования
+            logger.debug(f"Moving overlay to position: ({x_offset}, {y_offset})")
             self.overlay_widget.move(x_offset, y_offset)
             self.overlay_widget.show()
+            logger.debug(f"Overlay geometry updated: size={image_size}, offset=({x_offset}, {y_offset})")
         else:
+            logger.debug("Hiding overlay: scaled pixmap is null")
             self.overlay_widget.hide()
-            
+            logger.debug("Overlay hidden: no scaled pixmap")
+
         # Обновляем масштаб оверлеев после обновления геометрии
+        logger.debug("Calling _update_face_overlay_scales from _update_overlay_geometry")
         self._update_face_overlay_scales()
 
     def _update_face_overlay_scales(self):
         """Обновляет масштаб всех оверлеев лиц"""
-        for overlay in self.face_overlays.values():
+        logger.debug(f"Updating scales for {len(self.face_overlays)} face overlays, scale_factor={self.scale_factor}")
+        for face_id, overlay in self.face_overlays.items():
+            logger.debug(f"Setting scale for face overlay {face_id}")
             overlay.set_scale_factor(self.scale_factor)
+            logger.debug(f"Scale set for face overlay {face_id}")
 
     def load_face_data(self, image_path):
         """Загружает лица из БД"""
+        logger.debug(f"Starting to load face data for image: {image_path}")
         self.face_data.clear()
         try:
             # Используем существующий метод из DatabaseManager
+            logger.debug("Calling db_manager.get_image_faces()")
             faces_data = self.db_manager.get_image_faces(image_path)
-            
+            logger.debug(f"Loaded {len(faces_data)} faces for image {image_path}")
+
             for face_id, x1, y1, x2, y2, conf, name, person_id, is_person_status in faces_data:
+                logger.debug(f"Processing face {face_id}: x1={x1}, y1={y1}, x2={x2}, y2={y2}, conf={conf}, name={name}, person_id={person_id}, is_person_status={is_person_status}")
                 # Вычисляем bbox как (x, y, width, height)
                 x = x1
                 y = y1
                 width = x2 - x1
                 height = y2 - y1
-                
+
                 self.face_data[face_id] = {
                     'bbox': (x, y, width, height),
                     'person_name': name,
@@ -396,39 +526,51 @@ class PhotoViewer(QWidget):
                     'person_id': person_id,
                     'is_person': is_person_status
                 }
-                
+                logger.debug(f"Face {face_id}: bbox=({x},{y},{width},{height}), name={name}, conf={conf}")
+
+            logger.debug(f"Completed loading face data, total faces in face_data: {len(self.face_data)}")
         except Exception as e:
+            logger.error(f"Error loading face data for {image_path}: {e}")
             traceback.print_exc()
 
     def _create_face_overlays(self):
         """Создает оверлеи для отображения лиц"""
-        
+        logger.debug(f"Starting to create face overlays, overlay_widget parent: {self.overlay_widget.parent()}")
+
         # Удаляем существующие оверлеи
-        for overlay in self.face_overlays.values():
+        logger.debug(f"Removing {len(self.face_overlays)} existing face overlays")
+        for face_id, overlay in list(self.face_overlays.items()):
+            logger.debug(f"Deleting overlay for face {face_id}")
             overlay.deleteLater()
         self.face_overlays.clear()
-        
+
         # Создаем новые оверлеи для каждого лица
+        logger.debug(f"Creating {len(self.face_data)} face overlays")
         for face_id, face_info in self.face_data.items():
             bbox = face_info['bbox']
             person_name = face_info['person_name']
             confidence = face_info['confidence']
-            
+            logger.debug(f"Creating overlay for face {face_id}: bbox={bbox}, name={person_name}, confidence={confidence}")
+
             overlay = FaceOverlayWidget(
                 face_id, bbox, person_name, confidence, self.overlay_widget
             )
+            logger.debug(f"Created FaceOverlayWidget for face {face_id}")
             overlay.face_clicked.connect(self.edit_face_name)
             self.face_overlays[face_id] = overlay
-            
+            logger.debug(f"Added overlay to face_overlays for face {face_id}")
+
         # Обновляем масштаб оверлеев
+        logger.debug("Calling _update_face_overlay_scales")
         self._update_face_overlay_scales()
+        logger.debug("Completed creating face overlays")
 
     def resizeEvent(self, event):
         """Обработка изменения размера виджета"""
         super().resizeEvent(event)
         # При изменении размера окна изображение может изменить размеры при подгонке
         # Обновляем отображение с задержкой, чтобы избежать конфликта с другими обновлениями
-        QTimer.singleShot(50, self._update_display)
+        self._schedule_display_update(50)
 
     def wheelEvent(self, event):
         """Zoom колесиком"""
@@ -455,7 +597,7 @@ class PhotoViewer(QWidget):
         """Фильтр событий для отслеживания изменений в scroll_area"""
         if obj == self.scroll_area.viewport() and event.type() == event.Type.Resize:
             # Обновляем оверлей при изменении размера области просмотра
-            QTimer.singleShot(10, self._update_overlay_geometry)
+            self._schedule_display_update(10)
         return super().eventFilter(obj, event)
         
     def _on_scroll_changed(self, value):
@@ -511,24 +653,30 @@ class PhotoViewer(QWidget):
             # Получаем текущую информацию о лице из self.face_data
             face_info = self.face_data.get(face_id)
             if not face_info:
+                logger.error(f"Face info not found for face_id {face_id}")
                 return False
-            
+
             current_person_id = face_info['person_id']
             current_person_name = face_info['person_name']
-            
+
             if not current_person_id or not current_person_name:
+                logger.error(f"Invalid current person data for face_id {face_id}: id={current_person_id}, name={current_person_name}")
                 return False
-            
+
+            logger.debug(f"Updating face {face_id}: '{current_person_name}' -> '{new_name}'")
+
             # Проверяем, является ли новое имя существующей персоной
             target_person_id = self.db_manager.get_person_by_name(new_name)
             if target_person_id:
+                logger.debug(f"Moving face {face_id} to existing person {target_person_id} ('{new_name}')")
                 # Если выбрана уже существующая персона - просто перемещаем лицо
                 return self.db_manager.move_face_to_person(face_id, target_person_id)
-            
+
             # Проверяем, является ли текущая персона "Person_(id)" (т.е. результат кластеризации)
             import re
             person_pattern = r'^Person_\d+$'
             if re.match(person_pattern, current_person_name):
+                logger.debug(f"Renaming clustered person {current_person_id} from '{current_person_name}' to '{new_name}'")
                 # Обновляем имя текущей персоны
                 if self.db_manager.update_person_name(current_person_id, new_name):
                     # Подтверждаем персону
@@ -537,11 +685,13 @@ class PhotoViewer(QWidget):
                     person_faces = self.db_manager.get_person_faces(current_person_id)
                     for face_id_in_person, _, _, _, _, _, _, _, _ in person_faces:
                         self.db_manager.set_face_person_status(face_id_in_person, 1)
+                    logger.debug(f"Confirmed person {current_person_id} and updated {len(person_faces)} faces")
                     return True
                 return False
-            
+
             # Если текущая персона "not recognized"
             elif current_person_name == 'not recognized':
+                logger.debug(f"Creating new person '{new_name}' for face {face_id} from 'not recognized'")
                 # Создаем новую персону
                 new_person_id = self.db_manager.create_person(new_name)
                 if new_person_id:
@@ -551,17 +701,21 @@ class PhotoViewer(QWidget):
                         self.db_manager.confirm_person(new_person_id)
                         # Устанавливаем is_person = 1 для этого лица
                         self.db_manager.set_face_person_status(face_id, 1)
+                        logger.debug(f"Created and confirmed new person {new_person_id}")
                         return True
                 return False
-            
+
             # В остальных случаях просто обновляем имя персоны
             else:
+                logger.debug(f"Updating existing person name from '{current_person_name}' to '{new_name}'")
                 person_id = self.db_manager.get_person_by_name(new_name)
                 if not person_id:
                     person_id = self.db_manager.create_person(new_name)
+                    logger.debug(f"Created new person {person_id} for '{new_name}'")
                 return person_id and self.db_manager.move_face_to_person(face_id, person_id)
-                
+
         except Exception as e:
+            logger.error(f"Error updating face name for face_id {face_id}: {e}")
             QMessageBox.critical(self, "Ошибка", f"Ошибка обновления: {e}")
             return False
 
