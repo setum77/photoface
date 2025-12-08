@@ -1,18 +1,15 @@
 import os
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter, 
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
                              QTreeView, QListView, QPushButton, QFileDialog,
-                             QMessageBox, QMenu, QProgressDialog, QLabel, QApplication)
+                             QMessageBox, QMenu, QProgressDialog, QLabel, QApplication,
+                             QScrollArea, QFrame)
 from PyQt6.QtCore import QDir, QModelIndex, Qt, pyqtSignal, QSize
 from PyQt6.QtGui import QFileSystemModel, QAction, QStandardItemModel, QStandardItem, QIcon
 from src.photoface.core.database import DatabaseManager
 from src.photoface.core.scan_manager import ScanManager
 from src.photoface.core.config import Config
 from src.photoface.utils.helpers import generate_thumbnail, pil_to_pixmap, get_image_files
-
-class ThumbnailListModel(QStandardItemModel):
-    """Модель для отображения миниатюр фотографий"""
-    def __init__(self):
-        super().__init__()
+from src.photoface.ui.folder_photos_widget import FolderPhotosBlockWidget
 
 class FoldersTab(QWidget):
     # Сигналы для связи с другими компонентами
@@ -28,6 +25,7 @@ class FoldersTab(QWidget):
         self.scan_manager = ScanManager(db_manager, config)
         self.current_folder = None
         self.current_folder_id = None
+        self.folder_blocks = {}  # Словарь для хранения блоков папок
         self.init_ui()
         self.connect_signals()
 
@@ -42,9 +40,6 @@ class FoldersTab(QWidget):
         
         self.add_folder_btn = QPushButton("Добавить папку")
         self.add_folder_btn.clicked.connect(self.add_folder)
-        
-        self.remove_folder_btn = QPushButton("Удалить папку")
-        self.remove_folder_btn.clicked.connect(self.remove_selected_folder)
         
         self.scan_btn = QPushButton("Начать сканирование")
         self.scan_btn.clicked.connect(self.start_scanning)
@@ -61,7 +56,6 @@ class FoldersTab(QWidget):
         self.clear_btn.clicked.connect(self.clear_data)
 
         toolbar_layout.addWidget(self.add_folder_btn)
-        toolbar_layout.addWidget(self.remove_folder_btn)
         toolbar_layout.addWidget(self.scan_btn)
         toolbar_layout.addWidget(self.cancel_scan_btn)
         toolbar_layout.addWidget(self.editor_btn)
@@ -91,6 +85,7 @@ class FoldersTab(QWidget):
         self.folders_tree.setModel(self.folders_model)
         self.folders_tree.setHeaderHidden(True)
         self.folders_tree.doubleClicked.connect(self.on_folder_double_clicked)
+        self.folders_tree.clicked.connect(self.on_folder_clicked)
         
         # Контекстное меню для папок
         self.folders_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -112,24 +107,16 @@ class FoldersTab(QWidget):
         
         right_layout.addWidget(QLabel("Фотографии:"))
         
-        # Список для миниатюр
-        self.thumbnails_model = ThumbnailListModel()
-        self.thumbnails_view = QListView()
-        self.thumbnails_view.setModel(self.thumbnails_model)
-        self.thumbnails_view.setViewMode(QListView.ViewMode.IconMode)
-        self.thumbnails_view.setResizeMode(QListView.ResizeMode.Adjust)
-        self.thumbnails_view.setGridSize(QSize(150, 150))
-        self.thumbnails_view.setIconSize(QSize(120, 120))
-        self.thumbnails_view.doubleClicked.connect(self.on_image_double_clicked)
+        # Scroll area для блоков папок
+        self.scroll_area = QScrollArea()
+        self.photos_widget = QWidget()
+        self.photos_layout = QVBoxLayout(self.photos_widget)
+        self.photos_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         
-        # Контекстное меню для миниатюр
-        self.thumbnails_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.thumbnails_view.customContextMenuRequested.connect(self.show_thumbnail_context_menu)
+        self.scroll_area.setWidget(self.photos_widget)
+        self.scroll_area.setWidgetResizable(True)
         
-        # Горячие клавиши для миниатюр
-        self.thumbnails_view.keyPressEvent = self.thumbnail_keyPressEvent
-        
-        right_layout.addWidget(self.thumbnails_view)
+        right_layout.addWidget(self.scroll_area)
         
         splitter.addWidget(self.right_panel)
 
@@ -145,45 +132,18 @@ class FoldersTab(QWidget):
         self.progress_dialog.close()
 
         # Загружаем добавленные папки
-        self.load_folders()
-        
-    def thumbnail_keyPressEvent(self, event):
-        """Обработка нажатия клавиш для миниатюр"""
-        if event.key() == Qt.Key.Key_F2:
-            # Переименование файла
-            selected_indexes = self.thumbnails_view.selectedIndexes()
-            if selected_indexes:
-                self.rename_image(selected_indexes[0])
-        elif event.key() == Qt.Key.Key_E:
-            # Редактирование файла
-            selected_indexes = self.thumbnails_view.selectedIndexes()
-            if selected_indexes:
-                self.open_image_in_editor(selected_indexes[0])
-        else:
-            # Вызываем стандартный обработчик для остальных клавиш
-            super(QListView, self.thumbnails_view).keyPressEvent(event)
-    
-    def show_thumbnail_context_menu(self, position):
-        """Показывает контекстное меню для миниатюры"""
-        index = self.thumbnails_view.indexAt(position)
-        if index.isValid():
-            menu = QMenu(self)
-            
-            rename_action = QAction("Переименовать", self)
-            rename_action.triggered.connect(lambda: self.rename_image(index))
-            menu.addAction(rename_action)
-            
-            open_editor_action = QAction("Открыть в редакторе", self)
-            open_editor_action.triggered.connect(lambda: self.open_image_in_editor(index))
-            menu.addAction(open_editor_action)
-            
-            menu.exec(self.thumbnails_view.viewport().mapToGlobal(position))
+        self.refresh_data()
     
     def connect_signals(self):
         """Подключает сигналы сканирования"""
         self.scan_progress_updated.connect(self.update_scan_progress)
         self.scan_finished.connect(self.on_scan_finished)
 
+    def refresh_data(self):
+        """Обновляет данные в интерфейсе"""
+        self.load_folders()
+        self.load_all_folder_photos()
+        
     def load_folders(self):
         """Загружает список добавленных папок из базы данных"""
         self.folders_model.clear()
@@ -223,12 +183,33 @@ class FoldersTab(QWidget):
             
             # Рекурсивно добавляем все вложенные папки
             added_count = 0
+            added_folders = []
             for root, dirs, files in os.walk(folder_path):
                 if self.db_manager.add_folder(root):
                     added_count += 1
+                    added_folders.append(root)
             
             if added_count > 0:
-                self.load_folders()
+                self.refresh_data()  # Обновляем данные, включая визуализацию
+                
+                # Выбираем последнюю добавленную папку и отображаем её фотографии
+                if added_folders:
+                    latest_folder = added_folders[-1] # Берем последнюю добавленную папку
+                    # Находим индекс этой папки в модели
+                    for row in range(self.folders_model.rowCount()):
+                        index = self.folders_model.index(row, 0)
+                        if self.folders_model.data(index, Qt.ItemDataRole.UserRole) == latest_folder:
+                            # Выбираем эту папку
+                            self.folders_tree.setCurrentIndex(index)
+                            # Загружаем фотографии из этой папки
+                            folder_id = self.folders_model.data(index, Qt.ItemDataRole.UserRole + 1)
+                            self.current_folder = latest_folder
+                            self.current_folder_id = folder_id
+                            self.update_folder_stats(folder_id, latest_folder)
+                            # Прокручиваем к блоку новой папки
+                            self.scroll_to_folder_block(folder_id)
+                            break
+                
                 QMessageBox.information(self, "Успех", f"Добавлено {added_count} папок (включая вложенные): {folder_path}")
             else:
                 QMessageBox.warning(self, "Ошибка", "Папки уже добавлены или произошла ошибка")
@@ -251,8 +232,7 @@ class FoldersTab(QWidget):
         
         if reply == QMessageBox.StandardButton.Yes:
             if self.db_manager.remove_folder(folder_path):
-                self.load_folders()
-                self.thumbnails_model.clear()  # Очищаем миниатюры
+                self.refresh_data()
                 self.folder_stats_label.setText("Выберите папку для просмотра статистики")
                 QMessageBox.information(self, "Успех", "Папка удалена из обработки")
 
@@ -279,55 +259,131 @@ class FoldersTab(QWidget):
         
         self.current_folder = folder_path
         self.current_folder_id = folder_id
-        self.load_folder_images(folder_path)
         self.update_folder_stats(folder_id, folder_path)
+        # Прокручиваем к блоку выбранной папки
+        self.scroll_to_folder_block(folder_id)
 
-    def load_folder_images(self, folder_path):
-        """Загружает фотографии из выбранной папки"""
-        if not os.path.exists(folder_path):
-            QMessageBox.warning(self, "Ошибка", "Папка не существует")
-            return
+    def on_folder_clicked(self, index):
+        """Обрабатывает одиночный клик на папке - устанавливает акцент на блоке папки"""
+        folder_path = self.folders_model.data(index, Qt.ItemDataRole.UserRole)
+        folder_id = self.folders_model.data(index, Qt.ItemDataRole.UserRole + 1)
         
         self.current_folder = folder_path
-        self.thumbnails_model.clear()
+        self.current_folder_id = folder_id
+        self.update_folder_stats(folder_id, folder_path)
+        # Прокручиваем к блоку выбранной папки
+        self.scroll_to_folder_block(folder_id)
+
+    def scroll_to_folder_block(self, folder_id):
+        """Прокручивает к блоку указанной папки"""
+        if folder_id in self.folder_blocks:
+            folder_block = self.folder_blocks[folder_id]
+            
+            # Получаем позицию блока в виджете
+            block_pos = folder_block.pos()
+            block_y = block_pos.y()
+            
+            # Прокручиваем к позиции блока с небольшим отступом сверху
+            scroll_value = max(0, block_y - 20)  # 20 пикселей отступа сверху
+            self.scroll_area.verticalScrollBar().setValue(scroll_value)
+
+    def load_all_folder_photos(self):
+        """Загружает фотографии всех папок в виде блоков"""
+        # Очищаем текущие блоки
+        for i in reversed(range(self.photos_layout.count())):
+            widget = self.photos_layout.itemAt(i).widget()
+            if widget:
+                widget.deleteLater()
         
-        # Получаем список файлов изображений
-        image_files = get_image_files(folder_path)
+        # Очищаем словарь блоков
+        self.folder_blocks = {}
         
-        if not image_files:
-            QMessageBox.information(self, "Информация", "В папке нет изображений")
-            return
+        # Получаем все папки
+        folders = self.db_manager.get_all_folders()
         
-        # Показываем прогресс-диалог для больших папок
-        progress = QProgressDialog("Загрузка миниатюр...", "Отмена", 0, len(image_files), self)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        row = 0
+        for folder_id, folder_path, added_date in folders:
+            # Создаем блок для папки
+            folder_block = FolderPhotosBlockWidget(folder_path, folder_id, self.db_manager, parent=self)
+            
+            # Подключаем сигналы
+            folder_block.scan_folder.connect(self.on_scan_folder)
+            folder_block.delete_folder.connect(self.on_delete_folder)
+            folder_block.folder_selected.connect(self.on_folder_block_selected)
+            folder_block.photo_double_clicked.connect(self.on_photo_double_clicked)
+            
+            # Добавляем блок в макет
+            self.photos_layout.addWidget(folder_block)
+            
+            # Сохраняем ссылку на блок
+            self.folder_blocks[folder_id] = folder_block
+            
+            row += 1
+            
+            # Добавляем зазор 25px между блоками разных папок
+            if row < len(folders):
+                spacer = QFrame()
+                spacer.setFixedHeight(25)
+                spacer.setStyleSheet("background-color: transparent;")  # Прозрачный фон
+                self.photos_layout.addWidget(spacer)
+                row += 1
         
-        for i, image_path in enumerate(image_files):
-            if progress.wasCanceled():
+        # Если нет папок, показываем сообщение
+        if row == 0:
+            no_photos_label = QLabel("Нет папок для отображения")
+            no_photos_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.photos_layout.addWidget(no_photos_label)
+
+    def on_scan_folder(self, folder_path):
+        """Обработка сигнала сканирования папки"""
+        # Находим папку в модели по пути
+        for row in range(self.folders_model.rowCount()):
+            index = self.folders_model.index(row, 0)
+            if self.folders_model.data(index, Qt.ItemDataRole.UserRole) == folder_path:
+                # Устанавливаем как текущую папку и запускаем сканирование
+                folder_id = self.folders_model.data(index, Qt.ItemDataRole.UserRole + 1)
+                self.current_folder = folder_path
+                self.current_folder_id = folder_id
+                self.start_scanning(selected_folder=True)
                 break
-                
-            progress.setValue(i)
-            progress.setLabelText(f"Загрузка: {os.path.basename(image_path)}")
-            
-            # Генерируем миниатюру
-            thumbnail = generate_thumbnail(image_path)
-            if thumbnail:
-                pixmap = pil_to_pixmap(thumbnail)
-                item = QStandardItem()
-                item.setIcon(QIcon(pixmap))
-                item.setText(os.path.basename(image_path))
-                item.setData(image_path, Qt.ItemDataRole.UserRole)
-                self.thumbnails_model.appendRow(item)
-            
-            QApplication.processEvents()  # Для отзывчивости UI
+
+    def on_delete_folder(self, folder_path):
+        """Обработка сигнала удаления папки"""
+        reply = QMessageBox.question(
+            self, "Подтверждение",
+            f"Удалить папку '{folder_path}' из обработки?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
         
-        progress.setValue(len(image_files))
+        if reply == QMessageBox.StandardButton.Yes:
+            if self.db_manager.remove_folder(folder_path):
+                self.refresh_data()
+                self.folder_stats_label.setText("Выберите папку для просмотра статистики")
+                QMessageBox.information(self, "Успех", "Папка удалена из обработки")
+
+    def on_folder_block_selected(self, folder_path):
+        """Обработка выбора блока папки"""
+        # Выбираем папку в левом списке
+        for row in range(self.folders_model.rowCount()):
+            index = self.folders_model.index(row, 0)
+            if self.folders_model.data(index, Qt.ItemDataRole.UserRole) == folder_path:
+                self.folders_tree.setCurrentIndex(index)
+                # Загружаем статистику для выбранной папки
+                folder_id = self.folders_model.data(index, Qt.ItemDataRole.UserRole + 1)
+                self.current_folder = folder_path
+                self.current_folder_id = folder_id
+                self.update_folder_stats(folder_id, folder_path)
+                break
+
+    def on_photo_double_clicked(self, image_path):
+        """Обработка двойного клика по фотографии"""
+        self.image_double_clicked.emit(image_path)
 
     def on_image_double_clicked(self, index):
         """Обрабатывает двойной клик на изображении"""
-        image_path = self.thumbnails_model.data(index, Qt.ItemDataRole.UserRole)
-        if image_path:
-            self.image_double_clicked.emit(image_path)
+        # Заглушка для совместимости, используется только в старой реализации
+        # В новой реализации используется on_photo_double_clicked
+        pass
 
     def start_scanning(self, selected_folder=False):
         """Начинает сканирование папок на распознавание лиц"""
@@ -438,17 +494,8 @@ class FoldersTab(QWidget):
 
     def open_in_external_editor(self):
         """Открывает выбранный файл во внешнем редакторе"""
-        # Получаем выделенный файл
-        selected_indexes = self.thumbnails_view.selectedIndexes()
-        if not selected_indexes:
-            QMessageBox.warning(self, "Внимание", "Выберите изображение для открытия")
-            return
-            
-        index = selected_indexes[0]
-        image_path = self.thumbnails_model.data(index, Qt.ItemDataRole.UserRole)
-        if not image_path:
-            QMessageBox.warning(self, "Внимание", "Не удалось получить путь к изображению")
-            return
+        QMessageBox.warning(self, "Внимание", "Функция временно недоступна в новом интерфейсе папок")
+        return
         
         # Получаем путь к внешнему редактору из настроек
         editor_path = self.config.get_external_editor_path()
@@ -477,94 +524,17 @@ class FoldersTab(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть файл во внешнем редакторе: {e}")
 
-    def set_external_editor(self):
-        """Устанавливает внешний редактор изображений"""
-        editor_path, _ = QFileDialog.getOpenFileName(
-            self, "Выберите программу для редактирования изображений"
-        )
-        if editor_path:
-            self.config.set_external_editor_path(editor_path)
-            QMessageBox.information(self, "Успех", f"Редактор установлен: {editor_path}")
+    # Метод set_external_editor больше не используется в новом интерфейсе папок
 
     def rename_image(self, index):
         """Переименовывает изображение"""
-        import os
-        from PyQt6.QtWidgets import QInputDialog
-        
-        image_path = self.thumbnails_model.data(index, Qt.ItemDataRole.UserRole)
-        if not image_path:
-            QMessageBox.warning(self, "Ошибка", "Не удалось получить путь к изображению")
-            return
-            
-        directory = os.path.dirname(image_path)
-        old_filename = os.path.basename(image_path)
-        name, ext = os.path.splitext(old_filename)
-        
-        new_name, ok = QInputDialog.getText(
-            self,
-            "Переименовать файл",
-            "Введите новое имя файла:",
-            text=name
-        )
-        
-        if ok and new_name.strip():
-            new_filename = new_name.strip() + ext
-            new_path = os.path.join(directory, new_filename)
-            
-            # Проверяем, существует ли уже файл с таким именем
-            if os.path.exists(new_path):
-                QMessageBox.warning(self, "Ошибка", f"Файл {new_filename} уже существует")
-                return
-                
-            try:
-                os.rename(image_path, new_path)
-                
-                # Обновляем данные в модели
-                item = self.thumbnails_model.item(index.row())
-                if item:
-                    item.setText(new_filename)
-                    item.setData(new_path, Qt.ItemDataRole.UserRole)
-                
-                # Обновляем путь к файлу в базе данных
-                self.db_manager.update_image_path(image_path, new_path)
-                
-                # QMessageBox.information(self, "Успех", "Файл успешно переименован")
-            except OSError as e:
-                QMessageBox.critical(self, "Ошибка", f"Не удалось переименовать файл: {e}")
+        QMessageBox.warning(self, "Внимание", "Функция временно недоступна в новом интерфейсе папок")
+        return
 
     def open_image_in_editor(self, index):
         """Открывает изображение во внешнем редакторе"""
-        image_path = self.thumbnails_model.data(index, Qt.ItemDataRole.UserRole)
-        if not image_path:
-            QMessageBox.warning(self, "Ошибка", "Не удалось получить путь к изображению")
-            return
-        
-        # Получаем путь к внешнему редактору из настроек
-        editor_path = self.config.get_external_editor_path()
-        
-        if not editor_path:
-            # Если редактор не задан, предлагаем пользователю его указать
-            editor_path, _ = QFileDialog.getOpenFileName(
-                self, "Выберите программу для редактирования изображений"
-            )
-            if editor_path:
-                self.config.set_external_editor_path(editor_path)
-                QMessageBox.information(self, "Успех", f"Редактор установлен: {editor_path}")
-            else:
-                QMessageBox.information(self, "Информация", "Открытие во внешнем редакторе отменено")
-                return
-        
-        # Проверяем существование файла редактора
-        if not os.path.exists(editor_path):
-            QMessageBox.critical(self, "Ошибка", f"Файл внешнего редактора не найден: {editor_path}")
-            return
-            
-        # Открываем файл во внешнем редакторе
-        try:
-            import subprocess
-            subprocess.Popen([editor_path, image_path])
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось открыть файл во внешнем редакторе: {e}")
+        QMessageBox.warning(self, "Внимание", "Функция временно недоступна в новом интерфейсе папок")
+        return
 
     def clear_data(self):
         """Очищает все обработанные данные"""
