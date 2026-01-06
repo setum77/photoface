@@ -150,16 +150,54 @@ class MainWindow(QMainWindow):
         """Загружает состояние окна"""
         geometry = self.config.get('ui.window_geometry')
         if geometry:
-            self.restoreGeometry(geometry)
+            # Преобразуем строку в bytes, если необходимо
+            if isinstance(geometry, str):
+                try:
+                    # Попробуем десериализовать JSON строку, если она содержит закодированные байты
+                    import json
+                    parsed = json.loads(geometry)
+                    if isinstance(parsed, dict) and parsed.get("__type__") == "QByteArray":
+                        import base64
+                        encoded = parsed["__value__"]
+                        geometry = base64.b64decode(encoded.encode('ascii'))
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    # Если не удалось десериализовать, оставляем как есть
+                    pass
             
-        state = self.config.get('ui.window_state') 
+            # Проверяем тип данных перед вызовом restoreGeometry
+            if isinstance(geometry, (bytes, bytearray)):
+                self.restoreGeometry(geometry)
+            elif hasattr(geometry, 'data'):  # QByteArray
+                self.restoreGeometry(geometry)
+            
+        state = self.config.get('ui.window_state')
         if state:
-            self.restoreState(state)
+            # Аналогичная проверка для состояния окна
+            if isinstance(state, str):
+                try:
+                    import json
+                    parsed = json.loads(state)
+                    if isinstance(parsed, dict) and parsed.get("__type__") == "QByteArray":
+                        import base64
+                        encoded = parsed["__value__"]
+                        state = base64.b64decode(encoded.encode('ascii'))
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    pass
+            
+            if isinstance(state, (bytes, bytearray)):
+                self.restoreState(state)
+            elif hasattr(state, 'data'):  # QByteArray
+                self.restoreState(state)
             
     def save_window_state(self):
         """Сохраняет состояние окна"""
-        self.config.set('ui.window_geometry', self.saveGeometry())
-        self.config.set('ui.window_state', self.saveState())
+        # Сохраняем геометрию и состояние как QByteArray объекты
+        geometry = self.saveGeometry()
+        state = self.saveState()
+        
+        # Сохраняем в конфигурацию
+        self.config.set('ui.window_geometry', geometry)
+        self.config.set('ui.window_state', state)
         self.config.set('ui.last_tab_index', self.tabs.currentIndex())
         
     def closeEvent(self, event: QCloseEvent):

@@ -259,7 +259,13 @@ class PersonFaceBlockWidget(QWidget):
         row, col = 0, 0
         max_cols = 4
         
-        for face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status in self.faces:
+        for face_data in self.faces:
+            # Извлекаем только нужные поля, игнорируя person_is_confirmed если он присутствует
+            if len(face_data) >= 9:
+                face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status = face_data[:9]
+            else:
+                # Обработка случая, если данных меньше 9
+                continue
             bbox = (x1, y1, x2, y2)
             face_widget = FaceThumbnailWidget(
                 face_id, image_path, bbox, confidence, is_person_status,
@@ -372,7 +378,7 @@ class PersonNameDialog(QDialog):
                 
                 # Подсчитываем количество подтвержденных и неподтвержденных лиц для персоны
                 person_faces = self.db_manager.get_person_faces(person_id)
-                confirmed_faces = sum(1 for face in person_faces if face[8] == 1)  # is_person_status
+                confirmed_faces = sum(1 for face in person_faces if len(face) > 8 and face[8] == 1)  # is_person_status
                 unconfirmed_faces = len(person_faces) - confirmed_faces
                 
                 if confirmed_faces == face_count and face_count > 0:  # Все лица подтверждены
@@ -567,7 +573,7 @@ class FacesTab(QWidget):
         for person_id, name, is_confirmed, face_count in persons:
             # Подсчитываем количество подтвержденных и неподтвержденных лиц для персоны
             person_faces = self.db_manager.get_person_faces(person_id)
-            confirmed_faces = sum(1 for face in person_faces if face[8] == 1)  # is_person_status
+            confirmed_faces = sum(1 for face in person_faces if len(face) > 8 and face[8] == 1)  # is_person_status
             unconfirmed_faces = len(person_faces) - confirmed_faces
             
             if is_confirmed:
@@ -717,8 +723,22 @@ class FacesTab(QWidget):
             # Получаем лица для персоны
             faces = self.db_manager.get_person_faces(person_id)
             # Оставляем person_is_confirmed в данных, так как он нужен для правильной работы виджетов
-            faces = [(face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status, person_is_confirmed)
-                    for face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status, person_is_confirmed in faces]
+            # Обновляем список faces, чтобы убедиться, что все кортежи имеют правильное количество элементов
+            processed_faces = []
+            for face_data in faces:
+                if len(face_data) >= 10:
+                    # Если в данных уже есть person_is_confirmed (10 элементов), используем как есть
+                    face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status, person_is_confirmed = face_data
+                    processed_faces.append((face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status, person_is_confirmed))
+                elif len(face_data) >= 9:
+                    # Если в данных нет person_is_confirmed (9 элементов), добавляем значение по умолчанию
+                    face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status = face_data
+                    person_is_confirmed = None  # значение по умолчанию
+                    processed_faces.append((face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status, person_is_confirmed))
+                else:
+                    # Пропускаем некорректные данные
+                    continue
+            faces = processed_faces
             
             # Создаем блок для персоны
             person_block = PersonFaceBlockWidget(person_id, name, is_confirmed, faces, parent=self, thumbnail_cache=self.thumbnail_cache)
@@ -991,7 +1011,12 @@ class FacesTab(QWidget):
         
         # Устанавливаем is_person = 1 для каждого лица
         for face_data in person_faces:
-            face_id = face_data[0]  # первый элемент - это face_id
+            # Извлекаем только нужные поля, игнорируя person_is_confirmed если он присутствует
+            if len(face_data) >= 9:
+                face_id = face_data[0]  # первый элемент - это face_id
+            else:
+                # Обработка случая, если данных меньше 9
+                continue
             self.db_manager.set_face_person_status(face_id, 1)
         
         self.refresh_data()
@@ -1010,7 +1035,20 @@ class FacesTab(QWidget):
             if not_recognized_id:
                 # Перемещаем все лица
                 faces = self.db_manager.get_person_faces(person_id)
-                for face_id, _, _, _, _, _, _, _, _ in faces:
+                for face_data in faces:
+                    # Извлекаем только нужные поля, игнорируя person_is_confirmed если он присутствует
+                    if len(face_data) >= 9:
+                        face_id = face_data[0]
+                        # Используем только первые 9 элементов, игнорируя person_is_confirmed если он есть
+                        actual_face_data = face_data[:9] if len(face_data) > 9 else face_data
+                        if len(actual_face_data) == 9:
+                            face_id, _, _, _, _, _, _, _, _ = actual_face_data
+                        else:
+                            # Обработка случая, если данных меньше 9
+                            continue
+                    else:
+                        # Обработка случая, если данных меньше 9
+                        continue
                     self.db_manager.move_face_to_person(face_id, not_recognized_id)
                 
                 # Удаляем пустую персону
@@ -1057,7 +1095,20 @@ class FacesTab(QWidget):
             for person_id in empty_persons:
                 # Перемещаем в not recognized всех, кто может быть у этой персоны
                 faces = self.db_manager.get_person_faces(person_id)
-                for face_id, _, _, _, _, _, _, _, _ in faces:
+                for face_data in faces:
+                    # Извлекаем только нужные поля, игнорируя person_is_confirmed если он присутствует
+                    if len(face_data) >= 9:
+                        face_id = face_data[0]
+                        # Используем только первые 9 элементов, игнорируя person_is_confirmed если он есть
+                        actual_face_data = face_data[:9] if len(face_data) > 9 else face_data
+                        if len(actual_face_data) == 9:
+                            face_id, _, _, _, _, _, _, _, _ = actual_face_data
+                        else:
+                            # Обработка случая, если данных меньше 9
+                            continue
+                    else:
+                        # Обработка случая, если данных меньше 9
+                        continue
                     not_recognized_id = self.db_manager.get_person_by_name('not recognized')
                     if not_recognized_id:
                         self.db_manager.move_face_to_person(face_id, not_recognized_id)
