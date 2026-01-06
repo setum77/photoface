@@ -72,8 +72,9 @@ class FoldersTab(QWidget):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)  # Не позволяем панелям схлопываться
 
-        # Левая панель - дерево папок
+        # Левая панель - список папок
         self.left_panel = QWidget()
+        self.left_panel.setFixedWidth(250)  # Устанавливаем фиксированную ширину 250px как в faces_tab
         left_layout = QVBoxLayout(self.left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
         
@@ -94,8 +95,9 @@ class FoldersTab(QWidget):
         left_layout.addWidget(self.folders_tree)
 
         # Статистика папки
-        self.folder_stats_label = QLabel("Выберите папку для просмотра статистики")
-        self.folder_stats_label.setMaximumHeight(60)  # Ограничиваем высоту
+        self.folder_stats_label = QLabel()
+        self.folder_stats_label.setWordWrap(True)
+        self.folder_stats_label.setStyleSheet("font-size: 11px; padding: 5px; background-color: #f0f0f0; border: 1px solid #ccc;")
         left_layout.addWidget(self.folder_stats_label)
         
         splitter.addWidget(self.left_panel)
@@ -118,10 +120,16 @@ class FoldersTab(QWidget):
         
         right_layout.addWidget(self.scroll_area)
         
+        # Добавляем информацию о фотографиях под прокруткой
+        self.photos_stats_label = QLabel()
+        self.photos_stats_label.setWordWrap(True)
+        self.photos_stats_label.setStyleSheet("font-size: 11px; padding: 5px; background-color: #f0f0f0; border: 1px solid #ccc;")
+        right_layout.addWidget(self.photos_stats_label)
+        
         splitter.addWidget(self.right_panel)
 
         # Установка пропорций (увеличиваем правую панель)
-        splitter.setSizes([200, 600])
+        splitter.setSizes([250, 750])
         layout.addWidget(splitter, 1)  # 1 - коэффициент растяжения
 
         # Прогресс-диалог
@@ -143,6 +151,7 @@ class FoldersTab(QWidget):
         """Обновляет данные в интерфейсе"""
         self.load_folders()
         self.load_all_folder_photos()
+        self.update_photos_stats()
         
     def load_folders(self):
         """Загружает список добавленных папок из базы данных"""
@@ -170,6 +179,20 @@ class FoldersTab(QWidget):
             
         except Exception as e:
             self.folder_stats_label.setText(f"Ошибка загрузки статистики: {e}")
+    
+    def update_photos_stats(self):
+        """Обновляет статистику по фотографиям"""
+        # Получаем общую статистику по всем папкам
+        folders = self.db_manager.get_all_folders()
+        total_images = 0
+        processed_images = 0
+        
+        for folder_id, folder_path, _ in folders:
+            total_images += len(get_image_files(folder_path))
+            processed_images += self.db_manager.get_processed_images_count(folder_id)
+        
+        stats_text = f"Всего изображений: {total_images} | Обработано: {processed_images} | Осталось: {total_images - processed_images}"
+        self.photos_stats_label.setText(stats_text)
 
     def add_folder(self):
         """Добавляет новую папку для обработки"""
@@ -483,6 +506,9 @@ class FoldersTab(QWidget):
         # Обновляем статистику если папка выбрана
         if self.current_folder_id:
             self.update_folder_stats(self.current_folder_id, self.current_folder)
+        
+        # Обновляем общую статистику по фотографиям
+        self.update_photos_stats()
         
         # Показываем сообщение только при завершении реального сканирования
         # QMessageBox.information(self, "Успех", "Сканирование завершено!")

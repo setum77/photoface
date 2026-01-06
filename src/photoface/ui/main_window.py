@@ -22,6 +22,16 @@ class MainWindow(QMainWindow):
     def init_ui(self):
         self.setWindowTitle("Photo Face Manager")
         self.setGeometry(100, 100, 1200, 800)
+        
+        # Устанавливаем иконку приложения
+        from PyQt6.QtGui import QIcon
+        import os
+        icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'icon.ico')
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+            
+        # Также устанавливаем иконку для приложения в целом
+        QApplication.instance().setWindowIcon(QIcon(icon_path))
 
         # Создание меню
         self.create_menu()

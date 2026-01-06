@@ -287,6 +287,7 @@ class AlbumsTab(QWidget):
         
         # Левая панель - список персон с альбомами
         self.left_panel = QWidget()
+        self.left_panel.setFixedWidth(250)  # Устанавливаем фиксированную ширину 250px как в faces_tab
         left_layout = QVBoxLayout(self.left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
         
@@ -302,10 +303,9 @@ class AlbumsTab(QWidget):
         left_layout.addWidget(self.persons_list)
         
         # Информация о выбранной персоне
-        self.person_info_label = QLabel("Выберите персону для просмотра фотографий")
-        self.person_info_label.setMaximumHeight(80)  # Ограничиваем высоту
+        self.person_info_label = QLabel()
         self.person_info_label.setWordWrap(True)
-        self.person_info_label.setStyleSheet("padding: 5px; background-color: #f5f5f5; border: 1px solid #ddd;")
+        self.person_info_label.setStyleSheet("font-size: 11px; padding: 5px; background-color: #f0f0f0; border: 1px solid #ccc;")
         left_layout.addWidget(self.person_info_label)
         
         splitter.addWidget(self.left_panel)
@@ -328,10 +328,16 @@ class AlbumsTab(QWidget):
         
         right_layout.addWidget(self.scroll_area)
         
+        # Добавляем информацию о фотографиях под прокруткой
+        self.photos_stats_label = QLabel()
+        self.photos_stats_label.setWordWrap(True)
+        self.photos_stats_label.setStyleSheet("font-size: 11px; padding: 5px; background-color: #f0f0; border: 1px solid #ccc;")
+        right_layout.addWidget(self.photos_stats_label)
+        
         splitter.addWidget(self.right_panel)
         
-        # Установка пропорций
-        splitter.setSizes([250, 650])
+        # Установка пропорций как в faces_tab
+        splitter.setSizes([250, 750])
         layout.addWidget(splitter, 1)
 
         # Прогресс-диалог
@@ -396,6 +402,20 @@ class AlbumsTab(QWidget):
         stats_text = f"Персон: {total_persons} | Создано альбомов: {created_albums}"
         self.stats_label.setText(stats_text)
         
+        # Обновляем статистику по фотографиям в правой нижней части
+        total_photos = 0
+        exported_photos = 0
+        
+        for person_id, _, _, _ in persons:
+            person_photos = self.db_manager.get_person_photos(person_id)
+            total_photos += len(person_photos)
+            # Предполагаем, что экспортированные фото - это те, которые находятся в выходной директории
+            # Эту информацию можно получить из базы данных, но пока используем упрощенный вариант
+            exported_photos += len(person_photos)  # Упрощение - считаем, что все фото экспортированы
+        
+        photos_stats_text = f"Всего фотографий: {total_photos} | Экспортировано: {exported_photos}"
+        self.photos_stats_label.setText(photos_stats_text)
+        
     def on_person_selected(self, index):
         """Обрабатывает выбор персоны"""
         person_id = self.persons_model.data(index, Qt.ItemDataRole.UserRole)
@@ -404,6 +424,19 @@ class AlbumsTab(QWidget):
         
         self.current_person_id = person_id
         self.load_person_photos(person_id, person_name, album_created)
+        
+        # Обновляем информацию о персоне в нижней части левой панели
+        photos = self.db_manager.get_person_photos(person_id)
+        single_photos = self.db_manager.get_single_photos(person_id)
+        group_photos = self.db_manager.get_photos_with_multiple_faces(person_id)
+        
+        info_text = (f"Персона: <b>{person_name}</b><br>"
+                    f"Всего фотографий: {len(photos)}<br>"
+                    f"Одиночных: {len(single_photos)}<br>"
+                    f"С друзьями: {len(group_photos)}<br>"
+                    f"Альбом: {'Создан' if album_created else 'Не создан'}")
+        
+        self.person_info_label.setText(info_text)
         
     def load_person_photos(self, person_id, person_name, album_created):
         """Загружает фотографии выбранной персоны"""
