@@ -20,6 +20,44 @@ class FaceClusterer:
         self.db_manager = db_manager
         self.similarity_threshold = similarity_threshold
         self.config = config
+    
+    def _get_next_cluster_id(self):
+        """Получает следующий ID кластера с ведущими нулями"""
+        # Получаем общее количество всех лиц в базе данных (всех записей в таблице faces)
+        # которое используется для определения количества цифр в номере
+        total_faces = self.db_manager.get_total_faces_count()
+        
+        # Получаем последний использованный cluster_id из настроек
+        last_cluster_id = self.db_manager.get_setting('last_cluster_id', '0')
+        try:
+            last_cluster_id = int(last_cluster_id)
+        except ValueError:
+            last_cluster_id = 0
+        
+        # Вычисляем следующий ID (первый номер начинается с 1)
+        next_cluster_id = last_cluster_id + 1
+        
+        # Определяем количество цифр в номере в зависимости от общего количества кластеров
+        # В задании сказано, что если количество расспознаных лиц двухзначное,
+        # то {cluster_id} будет двухзначный и т.д.
+        if total_faces < 10:
+            digits = 1
+        elif total_faces < 100:
+            digits = 2
+        elif total_faces < 1000:
+            digits = 3
+        elif total_faces < 10000:
+            digits = 4
+        else:
+            digits = 5  # Для очень большого количества лиц
+        
+        # Форматируем ID с ведущими нулями
+        formatted_id = str(next_cluster_id).zfill(digits)
+        
+        # Сохраняем новый последний ID в настройках
+        self.db_manager.set_setting('last_cluster_id', str(next_cluster_id))
+        
+        return formatted_id
         
     def cluster_faces(self) -> Dict[int, List[int]]:
         """
@@ -110,8 +148,9 @@ class FaceClusterer:
                 if len(face_ids) < 1:
                     continue
                 
-                # Создаем новую персону для кластера
-                person_name = f"Person_{cluster_id}"
+                # Создаем новую персону для кластера с использованием нового формата имени
+                formatted_cluster_id = self._get_next_cluster_id()
+                person_name = f"Person_{formatted_cluster_id}"
                 person_id = self.db_manager.create_person(person_name)
                 
                 if person_id:
@@ -173,3 +212,32 @@ class FaceClusterer:
         except Exception as e:
             logger.error(f"Ошибка поиска похожих лиц: {e}")
             return []
+    
+    def test_cluster_naming(self):
+        """Тестирование логики именования кластеров"""
+        # Тестируем несколько сценариев
+        print("Тестирование логики именования кластеров:")
+        
+        # Предположим, что в системе 5 кластеров (однозначное число)
+        # Подделываем метод get_total_faces_count, чтобы вернуть 5
+        original_get_total = self.db_manager.get_total_faces_count
+        self.db_manager.get_total_faces_count = lambda: 5
+        
+        # Сбрасываем последний кластер ID в настройках
+        self.db_manager.set_setting('last_cluster_id', '0')
+        
+        # Генерируем несколько кластеров
+        for i in range(1, 6):
+            cluster_id = self._get_next_cluster_id()
+            print(f"Кластер {i}: {cluster_id} (ожидаем однозначный формат)")
+        
+        # Предположим, что в системе 45 кластеров (двухзначное число)
+        self.db_manager.get_total_faces_count = lambda: 45
+        
+        # Генерируем еще несколько кластеров
+        for i in range(6, 11):
+            cluster_id = self._get_next_cluster_id()
+            print(f"Кластер {i}: {cluster_id} (ожидаем двузначный формат)")
+        
+        # Восстанавливаем оригинальный метод
+        self.db_manager.get_total_faces_count = original_get_total

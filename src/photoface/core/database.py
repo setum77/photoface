@@ -792,3 +792,17 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM face_thumbnails")
             conn.commit()
+        
+    def get_total_persons_count(self):
+        """Возвращает общее количество персон (всех, кроме 'not recognized')"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM persons WHERE name != 'not recognized'")
+            return cursor.fetchone()[0]
+    
+    def get_total_faces_count(self):
+        """Возвращает общее количество всех лиц (всех записей в таблице faces)"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM faces")
+            return cursor.fetchone()[0]
