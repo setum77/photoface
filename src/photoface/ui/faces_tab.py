@@ -1,10 +1,11 @@
 import os
+import logging
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
                              QListView, QGridLayout, QPushButton, QMessageBox,
                              QMenu, QProgressDialog, QLabel, QLineEdit,
                              QDialog, QDialogButtonBox, QScrollArea,
                              QCheckBox, QFrame, QSizePolicy, QToolButton,
-                             QListWidget, QListWidgetItem)
+                             QListWidget, QListWidgetItem, QApplication)
 from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer, QPoint
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QPixmap, QIcon, QFont, QAction
 from src.photoface.core.database import DatabaseManager
@@ -13,10 +14,10 @@ from src.photoface.ui.photo_viewer import FaceEditDialog
 from src.photoface.utils.helpers import generate_thumbnail, pil_to_pixmap
 from src.photoface.utils.face_thumbnail_cache import FaceThumbnailCache
 
-# Глобальный кэш миниатюр лиц (инициализируется в FacesTab)
-face_thumbnail_cache = None
+# Настройка логирования
+logger = logging.getLogger(__name__)
 
-# Глобальный кэш миниатюр лиц
+# Глобальный кэш миниатюр лиц (инициализируется в FacesTab)
 face_thumbnail_cache = FaceThumbnailCache(cache_size=1000)
 
 class FaceThumbnailWidget(QFrame):
@@ -98,13 +99,6 @@ class FaceThumbnailWidget(QFrame):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         
-        # Устанавливаем event filter для дочерних элементов
-        # self.thumbnail_label.installEventFilter(self)
-        # for in range(buttons_layout.count()):
-        #     item = buttons_layout.itemAt(i)
-        #     if item and item.widget():
-        #         item.widget().installEventFilter(self)
-
         self.update_buttons()
         
         # Убедимся, что виджет может принимать фокус и обрабатывать события
@@ -152,8 +146,8 @@ class FaceThumbnailWidget(QFrame):
             
     def thumbnail_double_clicked(self):
         """Обрабатывает двойной клик на миниатюре"""
-        print(f"DEBUG: Thumbnail double clicked for image: {self.image_path}")
         self.face_double_clicked.emit(self.image_path)
+            
 class PersonFaceBlockWidget(QWidget):
     """Виджет блока лица с заголовком и миниатюрами лиц персоны"""
     
@@ -170,19 +164,21 @@ class PersonFaceBlockWidget(QWidget):
         self.person_id = person_id
         self.person_name = person_name
         self.is_confirmed = is_confirmed
-        # Извлекаем person_is_confirmed из данных о лицах и сохраняем только нужные поля
-        processed_faces = []
-        for face_data in faces:
-            if len(face_data) == 10:  # Если включено поле person_is_confirmed
-                (face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status, person_is_confirmed_from_face) = face_data
-                processed_faces.append((face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status))
-            else:  # Если поле person_is_confirmed не включено
-                processed_faces.append(face_data)
-        
-        self.faces = processed_faces
+        self.faces = self._process_faces_data(faces)
         self.face_widgets = []
         self.thumbnail_cache = thumbnail_cache  # Кэш миниатюр
         self.init_ui()
+             
+    def _process_faces_data(self, faces_data):
+        """Обработка данных о лицах, извлекая person_is_confirmed и сохраняя только нужные поля"""
+        processed_faces = []
+        for face_data in faces_data:
+            if len(face_data) == 10:  # Если включено поле person_is_confirmed
+                (face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status, person_is_confirmed_from_face) = face_data
+                processed_faces.append((face_id, image_path, x1, y1, x2, y2, confidence, is_person_status))
+            else:  # Если поле person_is_confirmed не включено
+                processed_faces.append(face_data)
+        return processed_faces
         
     def init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -261,10 +257,10 @@ class PersonFaceBlockWidget(QWidget):
         
         for face_data in self.faces:
             # Извлекаем только нужные поля, игнорируя person_is_confirmed если он присутствует
-            if len(face_data) >= 9:
-                face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status = face_data[:9]
+            if len(face_data) >= 8:
+                face_id, image_path, x1, y1, x2, y2, confidence, is_person_status = face_data[:8]
             else:
-                # Обработка случая, если данных меньше 9
+                # Обработка случая, если данных меньше 8
                 continue
             bbox = (x1, y1, x2, y2)
             face_widget = FaceThumbnailWidget(
@@ -297,19 +293,19 @@ class PersonFaceBlockWidget(QWidget):
         
     def on_face_confirmed(self, face_id):
         """Обработка подтверждения лица"""
-        print(f"DEBUG: Face confirmed - face_id: {face_id}")
+        logger.debug(f"Face confirmed - face_id: {face_id}")
         # Отправляем сигнал наверх к FacesTab для обработки через сигнал
         self.face_confirmed.emit(face_id)
     
     def on_face_rejected(self, face_id):
         """Обработка отклонения лица - отправляем сигнал наверх для обработки в FacesTab"""
-        print(f"DEBUG: Face rejected - face_id: {face_id}")
+        logger.debug(f"Face rejected - face_id: {face_id}")
         # Отправляем сигнал наверх к FacesTab для обработки
         self.face_rejected.emit(face_id)
     
     def on_face_double_clicked(self, image_path):
         """Обработка двойного клика по лицу"""
-        print(f"DEBUG: Face double clicked - image_path: {image_path}")
+        logger.debug(f"Face double clicked - image_path: {image_path}")
         # Передаем сигнал выше через собственный сигнал
         self.image_double_clicked.emit(image_path)
             
@@ -378,7 +374,7 @@ class PersonNameDialog(QDialog):
                 
                 # Подсчитываем количество подтвержденных и неподтвержденных лиц для персоны
                 person_faces = self.db_manager.get_person_faces(person_id)
-                confirmed_faces = sum(1 for face in person_faces if len(face) > 8 and face[8] == 1)  # is_person_status
+                confirmed_faces = sum(1 for face in person_faces if len(face) >= 9 and face[8] == 1)  # is_person_status
                 unconfirmed_faces = len(person_faces) - confirmed_faces
                 
                 if confirmed_faces == face_count and face_count > 0:  # Все лица подтверждены
@@ -422,24 +418,6 @@ class FacesTab(QWidget):
         face_thumbnail_cache = FaceThumbnailCache(db_manager=db_manager, cache_size=1000)
         self.thumbnail_cache = face_thumbnail_cache
         
-        # Подключаем сигнал для отладки
-        self.image_double_clicked.connect(self._debug_image_double_clicked)
-        self.init_ui()
-        
-    def _debug_image_double_clicked(self, image_path):
-        print(f"DEBUG: FacesTab received image_double_clicked with path: {image_path}")
-    
-    def __init__(self, db_manager: DatabaseManager, config=None):
-        super().__init__()
-        self.db_manager = db_manager
-        self.config = config
-        self.face_clusterer = FaceClusterer(db_manager, config=config)
-        self.current_person_id = None
-        self.person_blocks = {}  # Словарь для хранения блоков персон
-        # Инициализируем кэш миниатюр с db_manager
-        global face_thumbnail_cache
-        face_thumbnail_cache = FaceThumbnailCache(db_manager=db_manager, cache_size=1000)
-        self.thumbnail_cache = face_thumbnail_cache
         self.init_ui()
         
     def init_ui(self):
@@ -573,7 +551,7 @@ class FacesTab(QWidget):
         for person_id, name, is_confirmed, face_count in persons:
             # Подсчитываем количество подтвержденных и неподтвержденных лиц для персоны
             person_faces = self.db_manager.get_person_faces(person_id)
-            confirmed_faces = sum(1 for face in person_faces if len(face) > 8 and face[8] == 1)  # is_person_status
+            confirmed_faces = sum(1 for face in person_faces if len(face) >= 9 and face[8] == 1)  # is_person_status
             unconfirmed_faces = len(person_faces) - confirmed_faces
             
             if is_confirmed:
@@ -722,23 +700,6 @@ class FacesTab(QWidget):
         for person_id, name, is_confirmed, face_count in sorted_persons:
             # Получаем лица для персоны
             faces = self.db_manager.get_person_faces(person_id)
-            # Оставляем person_is_confirmed в данных, так как он нужен для правильной работы виджетов
-            # Обновляем список faces, чтобы убедиться, что все кортежи имеют правильное количество элементов
-            processed_faces = []
-            for face_data in faces:
-                if len(face_data) >= 10:
-                    # Если в данных уже есть person_is_confirmed (10 элементов), используем как есть
-                    face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status, person_is_confirmed = face_data
-                    processed_faces.append((face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status, person_is_confirmed))
-                elif len(face_data) >= 9:
-                    # Если в данных нет person_is_confirmed (9 элементов), добавляем значение по умолчанию
-                    face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status = face_data
-                    person_is_confirmed = None  # значение по умолчанию
-                    processed_faces.append((face_id, image_id, image_path, x1, y1, x2, y2, confidence, is_person_status, person_is_confirmed))
-                else:
-                    # Пропускаем некорректные данные
-                    continue
-            faces = processed_faces
             
             # Создаем блок для персоны
             person_block = PersonFaceBlockWidget(person_id, name, is_confirmed, faces, parent=self, thumbnail_cache=self.thumbnail_cache)
@@ -962,22 +923,22 @@ class FacesTab(QWidget):
             if not new_name or new_name == current_name:
                 return
                 
-            print(f"[DEBUG] Rename: {current_name} (id={person_id}) -> '{new_name}'")  # Лог для отладки
-            
+            logger.debug(f"Rename: {current_name} (id={person_id}) -> '{new_name}'")  # Лог для отладки
+             
             try:
                 # Ищем существующую персону по имени (первый match)
                 target_id = self.db_manager.get_person_by_name(new_name)
                 
                 if target_id and target_id != person_id:
                     # МЕРДЖ: все лица в target + DELETE текущей
-                    print(f"[DEBUG] Merge: {person_id} -> {target_id}")
+                    logger.debug(f"Merge: {person_id} -> {target_id}")
                     if self.db_manager.merge_persons(person_id, target_id):
                         success_msg = f"Лица '{current_name}' **слиты** с '{new_name}' (id={target_id})"
                     else:
                         raise Exception("Ошибка слияния")
                 else:
                     # Обычное переименование (если имя новое)
-                    print(f"[DEBUG] Rename to new name: '{new_name}' (no target)")
+                    logger.debug(f"Rename to new name: '{new_name}' (no target)")
                     if self.db_manager.update_person_name(person_id, new_name):
                         # Автоматически подтверждаем персону при переименовании
                         self.db_manager.confirm_person(person_id)
@@ -985,7 +946,7 @@ class FacesTab(QWidget):
                     else:
                         raise Exception("Ошибка переименования")
                 
-                print(f"[DEBUG] Успех: {success_msg}")
+                logger.debug(f"Успех: {success_msg}")
                 QMessageBox.information(self, "Успех", success_msg)
                 self.refresh_data()
                 # Прокручиваем к обновленному блоку персоны
@@ -994,7 +955,7 @@ class FacesTab(QWidget):
                 
             except Exception as e:
                 error_msg = f"Ошибка операции: {e}"
-                print(f"[ERROR] {error_msg}")
+                logger.error(error_msg)
                 QMessageBox.critical(self, "Ошибка", error_msg)
                     
     def confirm_person(self, person_id):
@@ -1012,10 +973,10 @@ class FacesTab(QWidget):
         # Устанавливаем is_person = 1 для каждого лица
         for face_data in person_faces:
             # Извлекаем только нужные поля, игнорируя person_is_confirmed если он присутствует
-            if len(face_data) >= 9:
+            if len(face_data) >= 8:
                 face_id = face_data[0]  # первый элемент - это face_id
             else:
-                # Обработка случая, если данных меньше 9
+                # Обработка случая, если данных меньше 8
                 continue
             self.db_manager.set_face_person_status(face_id, 1)
         
@@ -1037,17 +998,17 @@ class FacesTab(QWidget):
                 faces = self.db_manager.get_person_faces(person_id)
                 for face_data in faces:
                     # Извлекаем только нужные поля, игнорируя person_is_confirmed если он присутствует
-                    if len(face_data) >= 9:
+                    if len(face_data) >= 8:
                         face_id = face_data[0]
-                        # Используем только первые 9 элементов, игнорируя person_is_confirmed если он есть
-                        actual_face_data = face_data[:9] if len(face_data) > 9 else face_data
-                        if len(actual_face_data) == 9:
-                            face_id, _, _, _, _, _, _, _, _ = actual_face_data
+                        # Используем только первые 8 элементов, игнорируя person_is_confirmed если он есть
+                        actual_face_data = face_data[:8] if len(face_data) > 8 else face_data
+                        if len(actual_face_data) == 8:
+                            face_id, _, _, _, _, _, _, _ = actual_face_data
                         else:
-                            # Обработка случая, если данных меньше 9
+                            # Обработка случая, если данных меньше 8
                             continue
                     else:
-                        # Обработка случая, если данных меньше 9
+                        # Обработка случая, если данных меньше 8
                         continue
                     self.db_manager.move_face_to_person(face_id, not_recognized_id)
                 
@@ -1097,17 +1058,17 @@ class FacesTab(QWidget):
                 faces = self.db_manager.get_person_faces(person_id)
                 for face_data in faces:
                     # Извлекаем только нужные поля, игнорируя person_is_confirmed если он присутствует
-                    if len(face_data) >= 9:
+                    if len(face_data) >= 8:
                         face_id = face_data[0]
-                        # Используем только первые 9 элементов, игнорируя person_is_confirmed если он есть
-                        actual_face_data = face_data[:9] if len(face_data) > 9 else face_data
-                        if len(actual_face_data) == 9:
-                            face_id, _, _, _, _, _, _, _, _ = actual_face_data
+                        # Используем только первые 8 элементов, игнорируя person_is_confirmed если он есть
+                        actual_face_data = face_data[:8] if len(face_data) > 8 else face_data
+                        if len(actual_face_data) == 8:
+                            face_id, _, _, _, _, _, _ = actual_face_data
                         else:
-                            # Обработка случая, если данных меньше 9
+                            # Обработка случая, если данных меньше 8
                             continue
                     else:
-                        # Обработка случая, если данных меньше 9
+                        # Обработка случая, если данных меньше 8
                         continue
                     not_recognized_id = self.db_manager.get_person_by_name('not recognized')
                     if not_recognized_id:
@@ -1199,5 +1160,3 @@ class FacesTab(QWidget):
             cursor.execute("SELECT COUNT(*) FROM faces WHERE is_person = 1")
             return cursor.fetchone()[0]
 
-
-from PyQt6.QtWidgets import QApplication
