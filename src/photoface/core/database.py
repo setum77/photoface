@@ -368,6 +368,17 @@ class DatabaseManager:
             )
             return cursor.fetchone()[0]
 
+    def get_image_paths_by_folder_id(self, folder_id):
+        """Возвращает пути ко всем изображениям в указанной папке"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT file_path FROM images WHERE folder_id = ?",
+                (folder_id,)
+            )
+            results = cursor.fetchall()
+            return [row[0] for row in results]
+
     def get_processed_images_count(self, folder_id=None):
         """Возвращает количество обработанных изображений"""
         with self.get_connection() as conn:

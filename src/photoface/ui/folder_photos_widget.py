@@ -88,8 +88,8 @@ class FolderPhotosBlockWidget(QWidget):
         info_layout.setContentsMargins(50, 0, 0, 0)  # Отступ 50px от левого края
         
         # Имя папки с количеством фотографий
-        image_files = get_image_files(self.folder_path)
-        self.name_label = QLabel(f"{os.path.basename(self.folder_path)} ({len(image_files)} фотографий)")
+        image_files_count = self.db_manager.get_folder_images_count(self.folder_id)
+        self.name_label = QLabel(f"{os.path.basename(self.folder_path)} ({image_files_count} фотографий)")
         font = self.name_label.font()
         font.setBold(True)
         font.setPointSize(22)  # Размер шрифта 22 пункта
@@ -142,11 +142,12 @@ class FolderPhotosBlockWidget(QWidget):
         self.photos_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         
         # Добавляем миниатюры фотографий
-        image_files = get_image_files(self.folder_path)
+        # Получаем пути к изображениям из базы данных для конкретного folder_id
+        image_paths = self.db_manager.get_image_paths_by_folder_id(self.folder_id)
         row, col = 0, 0
         max_cols = 4
         
-        for image_path in image_files:
+        for image_path in image_paths:
             photo_widget = FolderPhotoWidget(image_path)
             photo_widget.photo_double_clicked.connect(self.on_photo_double_clicked)
             self.photos_layout.addWidget(photo_widget, row, col)

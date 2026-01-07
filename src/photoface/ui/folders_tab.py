@@ -231,6 +231,9 @@ class FoldersTab(QWidget):
                             self.update_folder_stats(folder_id, latest_folder)
                             # Прокручиваем к блоку новой папки
                             self.scroll_to_folder_block(folder_id)
+                            
+                            # Обновляем вкладку, чтобы показать миниатюры новых папок
+                            self.load_all_folder_photos()
                             break
                 
                 QMessageBox.information(self, "Успех", f"Добавлено {added_count} папок (включая вложенные): {folder_path}")
@@ -509,6 +512,9 @@ class FoldersTab(QWidget):
         
         # Обновляем общую статистику по фотографиям
         self.update_photos_stats()
+        
+        # Обновляем отображение миниатюр в виджетах папок
+        self.load_all_folder_photos()
         
         # Показываем сообщение только при завершении реального сканирования
         # QMessageBox.information(self, "Успех", "Сканирование завершено!")
