@@ -72,137 +72,26 @@ class ScanTask(QRunnable):
                 not_recognized_id = self.db_manager.create_person('not recognized')
                 logger.info(f"Создана персона 'not recognized' с ID: {not_recognized_id}")
 
-            total_images = 0
-            processed_images = 0
-            
             # Подсчитываем общее количество изображений
-            for root_folder_id, root_folder_path in root_folders:
-                # Рекурсивно обходим все вложенные папки
-                for current_folder_path, subdirs, files in os.walk(root_folder_path):
-                    # Проверяем, является ли текущая папка уже зарегистрированной в БД
-                    current_folder_db_id = self._get_or_create_folder_db_id(current_folder_path)
-                    if not current_folder_db_id:
-                        logger.error(f"Не удалось получить ID для папки: {current_folder_path}")
-                        continue
-
-                    try:
-                        image_files = get_image_files(current_folder_path)
-                        total_images += len(image_files)
-                        logger.info(f"Папка {current_folder_path}: {len(image_files)} изображений")
-                        for img in image_files[:5]: # Логируем первые 5 файлов
-                            logger.debug(f"  - {img}")
-                    except Exception as e:
-                        logger.error(f"Ошибка при получении файлов из папки {current_folder_path}: {e}")
-
+            total_images = self._count_images_recursive(root_folders)
             if total_images == 0:
                 logger.info("Нет изображений для обработки")
                 return
 
-            # Обрабатываем каждую папку и её вложенные папки
+            processed_images = 0
+            
+            # Обрабатываем каждую папку и её вложенные папки рекурсивно
             for root_folder_id, root_folder_path in root_folders:
                 if self.is_cancelled:
                     logger.info("Сканирование отменено")
                     break
                     
-                # Рекурсивно обходим все вложенные папки
-                for current_folder_path, subdirs, files in os.walk(root_folder_path):
-                    if self.is_cancelled:
-                        logger.info("Сканирование отменено")
-                        break
-                    
-                    # Проверяем, является ли текущая папка уже зарегистрированной в БД
-                    current_folder_db_id = self._get_or_create_folder_db_id(current_folder_path)
-                    if not current_folder_db_id:
-                        logger.error(f"Не удалось получить ID для папки: {current_folder_path}")
-                        continue
-
-                    logger.info(f"Сканирование папки: {current_folder_path} (DB ID: {current_folder_db_id})")
-                
-                    # Получаем список изображений в папке
-                    try:
-                        image_files = get_image_files(current_folder_path)
-                        logger.info(f"Найдено {len(image_files)} изображений в папке {current_folder_path}")
-                    except Exception as e:
-                        logger.error(f"Ошибка при получении изображений из папки {current_folder_path}: {e}")
-                        continue
-                    
-                    for image_path in image_files:
-                        if self.is_cancelled:
-                            logger.info("Сканирование отменено")
-                            break
-                            
-                        processed_images += 1
-                        self.signals.progress_updated.emit(
-                            processed_images, total_images, os.path.basename(image_path)
-                        )
-
-                        # ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ПРОВЕРКИ
-                        is_processed = self.db_manager.image_already_processed(image_path)
-                        logger.debug(f"Изображение {os.path.basename(image_path)}: уже обработано = {is_processed}")
-                        
-                        if is_processed:
-                            logger.debug(f"Пропускаем уже обработанное изображение: {image_path}")
-                            continue
-
-                        image_id = None
-                        try:
-                            # Получаем информацию о файле
-                            file_stats = os.stat(image_path)
-                            file_size = file_stats.st_size
-                            created_time = datetime.fromtimestamp(file_stats.st_ctime)
-
-                            # ДОБАВЛЯЕМ ЛОГИРОВАНИЕ ДОБАВЛЕНИЯ ИЗОБРАЖЕНИЯ
-                            logger.debug(f"Добавляем изображение в БД: {os.path.basename(image_path)}")
-                            image_id = self.db_manager.add_image(
-                                current_folder_db_id, image_path, os.path.basename(image_path),
-                                file_size, created_time
-                            )
-
-                            if not image_id:
-                                logger.error(f"Не удалось добавить изображение в БД: {image_path}")
-                                continue
-
-                            logger.debug(f"Изображение добавлено с ID: {image_id}")
-
-                            # Обновляем статус на 'processing'
-                            self.db_manager.update_image_status(image_id, 'processing')
-
-                            # Детекция лиц
-                            logger.info(f"Детекция лиц в изображении: {os.path.basename(image_path)}")
-                            faces = self.face_analyzer.detect_faces(image_path)
-                            logger.info(f"Найдено {len(faces)} лиц в изображении {os.path.basename(image_path)}")
-
-                            # Сохраняем найденные лица
-                            face_count = 0
-                            for face in faces:
-                                # Распаковываем координаты bounding box
-                                bbox = face['bbox']
-                                x1, y1, x2, y2 = bbox
-
-                                face_id = self.db_manager.add_face(
-                                    image_id=image_id,
-                                    person_id=not_recognized_id,
-                                    embedding=face['embedding'],
-                                    bbox=bbox,
-                                    confidence=face['confidence']
-                                )
-                                if face_id:
-                                    face_count += 1
-                                    logger.debug(f"Добавлено лицо с ID: {face_id}")
-                                else:
-                                    logger.error(f"Не удалось добавить лицо в БД для изображения {image_path}")
-
-                            logger.info(f"Сохранено {face_count} лиц для изображения {os.path.basename(image_path)}")
-
-                            # Обновляем статус на 'completed'
-                            self.db_manager.update_image_status(image_id, 'completed')
-                            logger.info(f"Обработано изображение: {os.path.basename(image_path)} - {len(faces)} лиц")
-
-                        except Exception as e:
-                            logger.error(f"Ошибка обработки изображения {image_path}: {e}")
-                            # Помечаем изображение как ошибочное
-                            if image_id:
-                                self.db_manager.update_image_status(image_id, 'error')
+                processed_images = self._process_folder_recursive(
+                    root_folder_path,
+                    processed_images,
+                    total_images,
+                    not_recognized_id
+                )
                     
             logger.info(f"Сканирование завершено. Обработано {processed_images}/{total_images} изображений")
                                  
@@ -210,20 +99,151 @@ class ScanTask(QRunnable):
             logger.error(f"Критическая ошибка в процессе сканирования: {e}")
             raise
 
+    def _count_images_recursive(self, root_folders):
+        """Рекурсивный подсчет изображений"""
+        total = 0
+        for root_folder_id, root_folder_path in root_folders:
+            for current_folder_path, subdirs, files in os.walk(root_folder_path):
+                image_files = get_image_files(current_folder_path)
+                total += len(image_files)
+        return total
+
+    def _process_folder_recursive(self, folder_path, processed_images, total_images, not_recognized_id):
+        """Рекурсивная обработка папки и её подпапок"""
+        if self.is_cancelled:
+            return processed_images
+
+        # Создаем или получаем ID текущей папки в БД
+        current_folder_db_id = self._get_or_create_folder_db_id(folder_path)
+        if not current_folder_db_id:
+            logger.error(f"Не удалось получить ID для папки: {folder_path}")
+            return processed_images
+
+        logger.info(f"Сканирование папки: {folder_path} (DB ID: {current_folder_db_id})")
+
+        # Получаем список изображений только в этой папке (не в подпапках)
+        # Используем os.listdir вместо get_image_files, чтобы не включать подпапки
+        image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'}
+        images = []
+        try:
+            for file in os.listdir(folder_path):
+                file_path = os.path.join(folder_path, file)
+                if os.path.isfile(file_path):
+                    _, ext = os.path.splitext(file.lower())
+                    if ext in image_extensions:
+                        images.append(file_path)
+            logger.info(f"Найдено {len(images)} изображений в папке {folder_path}")
+        except Exception as e:
+            logger.error(f"Ошибка при получении изображений из папки {folder_path}: {e}")
+            return processed_images
+
+        # Обрабатываем изображения в текущей папке
+        for image_path in images:
+            if self.is_cancelled:
+                logger.info("Сканирование отменено")
+                break
+                
+            processed_images += 1
+            self.signals.progress_updated.emit(
+                processed_images, total_images, os.path.basename(image_path)
+            )
+
+            # ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ПРОВЕРКИ
+            is_processed = self.db_manager.image_already_processed(image_path)
+            logger.debug(f"Изображение {os.path.basename(image_path)}: уже обработано = {is_processed}")
+            
+            if is_processed:
+                logger.debug(f"Пропускаем уже обработанное изображение: {image_path}")
+                continue
+
+            image_id = None
+            try:
+                # Получаем информацию о файле
+                file_stats = os.stat(image_path)
+                file_size = file_stats.st_size
+                created_time = datetime.fromtimestamp(file_stats.st_ctime)
+
+                # ДОБАВЛЯЕМ ЛОГИРОВАНИЕ ДОБАВЛЕНИЯ ИЗОБРАЖЕНИЯ
+                logger.debug(f"Добавляем изображение в БД: {os.path.basename(image_path)}")
+                image_id = self.db_manager.add_image(
+                    current_folder_db_id, image_path, os.path.basename(image_path),
+                    file_size, created_time
+                )
+
+                if not image_id:
+                    logger.error(f"Не удалось добавить изображение в БД: {image_path}")
+                    continue
+
+                logger.debug(f"Изображение добавлено с ID: {image_id}")
+
+                # Обновляем статус на 'processing'
+                self.db_manager.update_image_status(image_id, 'processing')
+
+                # Детекция лиц
+                logger.info(f"Детекция лиц в изображении: {os.path.basename(image_path)}")
+                faces = self.face_analyzer.detect_faces(image_path)
+                logger.info(f"Найдено {len(faces)} лиц в изображении {os.path.basename(image_path)}")
+
+                # Сохраняем найденные лица
+                face_count = 0
+                for face in faces:
+                    # Распаковываем координаты bounding box
+                    bbox = face['bbox']
+                    x1, y1, x2, y2 = bbox
+
+                    face_id = self.db_manager.add_face(
+                        image_id=image_id,
+                        person_id=not_recognized_id,
+                        embedding=face['embedding'],
+                        bbox=bbox,
+                        confidence=face['confidence']
+                    )
+                    if face_id:
+                        face_count += 1
+                        logger.debug(f"Добавлено лицо с ID: {face_id}")
+                    else:
+                        logger.error(f"Не удалось добавить лицо в БД для изображения {image_path}")
+
+                logger.info(f"Сохранено {face_count} лиц для изображения {os.path.basename(image_path)}")
+
+                # Обновляем статус на 'completed'
+                self.db_manager.update_image_status(image_id, 'completed')
+                logger.info(f"Обработано изображение: {os.path.basename(image_path)} - {len(faces)} лиц")
+
+            except Exception as e:
+                logger.error(f"Ошибка обработки изображения {image_path}: {e}")
+                # Помечаем изображение как ошибочное
+                if image_id:
+                    self.db_manager.update_image_status(image_id, 'error')
+
+        # Рекурсивно обрабатываем подпапки
+        try:
+            for item in os.listdir(folder_path):
+                item_path = os.path.join(folder_path, item)
+                if os.path.isdir(item_path):
+                    processed_images = self._process_folder_recursive(
+                        item_path,
+                        processed_images,
+                        total_images,
+                        not_recognized_id
+                    )
+        except Exception as e:
+            logger.error(f"Ошибка при доступе к подпапкам {folder_path}: {e}")
+
+        return processed_images
+
     def _get_or_create_folder_db_id(self, folder_path):
         """Получает ID папки из БД или создает новую запись"""
         # Проверяем, существует ли папка в БД
-        if self.db_manager.folder_exists(folder_path):
-            # Получаем существующий ID папки
-            with self.db_manager.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT id FROM folders WHERE path = ?", (folder_path,))
-                result = cursor.fetchone()
-                if result:
-                    return result[0]
-        else:
-            # Добавляем папку в БД и возвращаем новый ID
-            return self.db_manager.add_folder(folder_path)
+        with self.db_manager.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM folders WHERE path = ?", (folder_path,))
+            result = cursor.fetchone()
+            if result:
+                return result[0]
+        
+        # Если папка не найдена в БД, добавляем её и возвращаем новый ID
+        return self.db_manager.add_folder(folder_path)
 
 class ScanManager:
     """Менеджер сканирования для координации процессов"""
