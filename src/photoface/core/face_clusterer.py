@@ -213,31 +213,4 @@ class FaceClusterer:
             logger.error(f"Ошибка поиска похожих лиц: {e}")
             return []
     
-    def test_cluster_naming(self):
-        """Тестирование логики именования кластеров"""
-        # Тестируем несколько сценариев
-        print("Тестирование логики именования кластеров:")
-        
-        # Предположим, что в системе 5 кластеров (однозначное число)
-        # Подделываем метод get_total_faces_count, чтобы вернуть 5
-        original_get_total = self.db_manager.get_total_faces_count
-        self.db_manager.get_total_faces_count = lambda: 5
-        
-        # Сбрасываем последний кластер ID в настройках
-        self.db_manager.set_setting('last_cluster_id', '0')
-        
-        # Генерируем несколько кластеров
-        for i in range(1, 6):
-            cluster_id = self._get_next_cluster_id()
-            print(f"Кластер {i}: {cluster_id} (ожидаем однозначный формат)")
-        
-        # Предположим, что в системе 45 кластеров (двухзначное число)
-        self.db_manager.get_total_faces_count = lambda: 45
-        
-        # Генерируем еще несколько кластеров
-        for i in range(6, 11):
-            cluster_id = self._get_next_cluster_id()
-            print(f"Кластер {i}: {cluster_id} (ожидаем двузначный формат)")
-        
-        # Восстанавливаем оригинальный метод
-        self.db_manager.get_total_faces_count = original_get_total
+    
